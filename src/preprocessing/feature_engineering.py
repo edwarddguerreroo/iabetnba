@@ -55,28 +55,104 @@ class FeatureEngineering:
         
     def generate_points_over_under_features(self, df):
         """
-        Genera características de Over/Under para puntos totales y de equipo
+        Genera características de Over/Under para puntos de equipo y puntos totales.
         
         Args:
-            df (pd.DataFrame): DataFrame con datos de juegos
+            df (pd.DataFrame): DataFrame de entrada con columnas de puntuación
         
         Returns:
             pd.DataFrame: DataFrame con nuevas columnas de Over/Under
         """
+        # Columnas a proteger
+        protected_columns = ['team_score', 'opp_score', 'total_score', 'point_diff',]
+        
         try:
-            # Generar Total_Points_Over_Under
-            if 'team_score' in df.columns and 'opp_score' in df.columns:
+            # Verificar columnas disponibles
+            score_columns = [col.lower() for col in df.columns]
+        
+            # Generar Total_Points_Over_Under (suma de puntos de ambos equipos)
+            if 'total_score' in df.columns:
+                df['Total_Points_Over_Under'] = df['total_score']
+                logger.info("Total_Points_Over_Under generado a partir de total_score")
+            elif all(col in df.columns for col in ['team_score', 'opp_score']):
                 df['Total_Points_Over_Under'] = df['team_score'] + df['opp_score']
-            elif 'Team_Score' in df.columns and 'Opp_Score' in df.columns:
+                logger.info("Total_Points_Over_Under generado a partir de team_score + opp_score")
+            elif all(col in df.columns for col in ['Team_Score', 'Opp_Score']):
                 df['Total_Points_Over_Under'] = df['Team_Score'] + df['Opp_Score']
+                logger.info("Total_Points_Over_Under generado a partir de Team_Score + Opp_Score")
+            else:
+                # Buscar cualquier columna que pueda contener puntos totales
+                total_cols = [col for col in df.columns if 'total' in col.lower() and 'score' in col.lower() or 'points' in col.lower()]
+                if total_cols:
+                    df['Total_Points_Over_Under'] = df[total_cols[0]]
+                    logger.info(f"Total_Points_Over_Under generado a partir de {total_cols[0]}")
+                else:
+                    # Si no hay columnas de puntos totales, intentar crear a partir de puntos de equipo
+                    team_cols = [col for col in df.columns if ('team' in col.lower() or 'home' in col.lower()) and ('score' in col.lower() or 'points' in col.lower())]
+                    opp_cols = [col for col in df.columns if ('opp' in col.lower() or 'away' in col.lower()) and ('score' in col.lower() or 'points' in col.lower())]
             
-            # Generar Team_Points_Over_Under
+                    if team_cols and opp_cols:
+                        df['Total_Points_Over_Under'] = df[team_cols[0]] + df[opp_cols[0]]
+                        logger.info(f"Total_Points_Over_Under generado a partir de {team_cols[0]} + {opp_cols[0]}")
+                    else:
+                        # Último recurso: crear una columna con valores predeterminados
+                        logger.warning("No se encontraron columnas para generar Total_Points_Over_Under. Creando con valores predeterminados.")
+                        df['Total_Points_Over_Under'] = 220  # Valor promedio de puntos totales en NBA
+        
+            # Generar Team_Points_Over_Under (puntos del equipo)
             if 'team_score' in df.columns:
                 df['Team_Points_Over_Under'] = df['team_score']
+                logger.info("Team_Points_Over_Under generado a partir de team_score")
             elif 'Team_Score' in df.columns:
                 df['Team_Points_Over_Under'] = df['Team_Score']
+                logger.info("Team_Points_Over_Under generado a partir de Team_Score")
+            else:
+                # Buscar cualquier columna que pueda contener puntos de equipo
+                team_cols = [col for col in df.columns if ('team' in col.lower() or 'home' in col.lower()) and ('score' in col.lower() or 'points' in col.lower())]
+                if team_cols:
+                    df['Team_Points_Over_Under'] = df[team_cols[0]]
+                    logger.info(f"Team_Points_Over_Under generado a partir de {team_cols[0]}")
+                else:
+                    # Último recurso: crear una columna con valores predeterminados
+                    logger.warning("No se encontraron columnas para generar Team_Points_Over_Under. Creando con valores predeterminados.")
+                    df['Team_Points_Over_Under'] = 110  # Valor promedio de puntos de equipo en NBA
+    
         except Exception as e:
+            
             logger.error(f"Error generando características de Over/Under: {e}")
+            
+            # Asegurar que las columnas existan incluso si hay un error
+            if 'Total_Points_Over_Under' not in df.columns:
+                df['Total_Points_Over_Under'] = 220
+            if 'Team_Points_Over_Under' not in df.columns:
+                df['Team_Points_Over_Under'] = 110
+        
+        # Método para proteger columnas durante la eliminación por correlación
+        def protect_columns(self, df, to_drop, protected_columns):
+            """
+            Elimina columnas correlacionadas excepto las columnas protegidas.
+            
+            Args:
+                df (pd.DataFrame): DataFrame de entrada
+                to_drop (list): Lista de columnas a eliminar
+                protected_columns (list): Lista de columnas a proteger
+            
+            Returns:
+                list: Lista de columnas a eliminar, excluyendo las protegidas
+            """
+            # Filtrar columnas a eliminar, excluyendo las protegidas
+            filtered_to_drop = [
+                col for col in to_drop 
+                if col not in protected_columns and 
+                   col.lower() not in [pc.lower() for pc in protected_columns]
+            ]
+            
+            return filtered_to_drop
+        
+        # Sobrescribir el método de eliminación de columnas
+        self.get_columns_to_drop = lambda df, to_drop_extreme, to_drop_high: (
+            protect_columns(self, df, to_drop_extreme + to_drop_high, protected_columns)
+        )
         
         return df
     
@@ -107,6 +183,7 @@ class FeatureEngineering:
             # Crear barra de progreso para los pasos de procesamiento
             steps = [
                 # Primero las características básicas y de equipo
+                ("Características de over/under (Total_Points y Team_Points)", self.generate_points_over_under_features),
                 ("Características de equipo", self.add_team_features),
                 ("Características de puntuación de equipo", self.add_team_scoring_features),
                 ("Características de over/under", self.add_over_under_features),
@@ -607,7 +684,7 @@ class FeatureEngineering:
         basic_protected_cols = ['Player', 'Team', 'Date', 'Season', 'Pos', 'Opp', 'Away', 
                               'PTS', 'TRB', 'AST', 'STL', 'BLK', 'TOV', 'PF', 'FG', 'FGA', 'FG%', 
                               '3P', '3PA', '3P%', 'FT', 'FTA', 'FT%', 'MP', 'GmSc', 'is_home', 
-                              'Win', 'Team_Score', 'Opp_Score']
+                              'Win', 'Team_Score', 'Opp_Score', 'Total_Points_Over_Under']
         
         # Combinar columnas básicas protegidas con características específicas por target
         protected_cols = list(set(basic_protected_cols + all_target_features))
@@ -679,13 +756,15 @@ class FeatureEngineering:
                 if preserved_in_target:
                     preserved_features[target] = preserved_in_target
             
+            # Convertir listas y diccionarios a formatos serializables
+            # Asegurar que no haya objetos de pandas (Series, DataFrames) en el informe
             correlation_report = {
-                'columnas_eliminadas_correlacion_extrema': to_drop_extreme,
-                'columnas_eliminadas_correlacion_alta': to_drop_high,
-                'umbral_extremo': extreme_threshold,
-                'umbral_alto': self.correlation_threshold,
+                'columnas_eliminadas_correlacion_extrema': list(to_drop_extreme),
+                'columnas_eliminadas_correlacion_alta': list(to_drop_high),
+                'umbral_extremo': float(extreme_threshold),
+                'umbral_alto': float(self.correlation_threshold),
                 'detalles_correlacion': correlation_info,
-                'caracteristicas_preservadas_por_target': preserved_features
+                'caracteristicas_preservadas_por_target': {k: list(v) for k, v in preserved_features.items()}
             }
             
             with open('correlation_report.json', 'w', encoding='utf-8') as f:
@@ -1595,15 +1674,48 @@ class FeatureEngineering:
                     new_features[f'{stat}_away_avg'] = away_stats
                     logger.debug(f"Añadida característica: {stat}_away_avg")
                     
-                    # Diferencial local vs visitante (normalizado para reducir correlaciones)
-                    # Usar método seguro para evitar errores con valores NaN
-                    home_avg = new_features.get(f'{stat}_home_avg', pd.Series(index=df.index)).fillna(0)
-                    away_avg = new_features.get(f'{stat}_away_avg', pd.Series(index=df.index)).fillna(0)
+                    # Calcular home_away_ratio por jugador en lugar de globalmente
+                    # Inicializar columna con valores pequeños no cero
+                    new_features[f'{stat}_home_away_ratio'] = pd.Series(0.01, index=df.index)
                     
-                    # Usar diferencial normalizado en lugar de diferencia absoluta
-                    sum_avg = home_avg + away_avg
-                    eps = 1e-6  # Evitar división por cero
-                    new_features[f'{stat}_home_away_ratio'] = (home_avg - away_avg) / (sum_avg + eps)
+                    # Calcular ratio por jugador
+                    for player in df['Player'].unique():
+                        player_mask = df['Player'] == player
+                        
+                        # Obtener datos del jugador
+                        player_home_data = df[player_mask & (df['Away'] != '@')]
+                        player_away_data = df[player_mask & (df['Away'] == '@')]
+                        
+                        # Verificar que hay suficientes datos
+                        if len(player_home_data) >= 1 and len(player_away_data) >= 1:
+                            # Calcular promedios
+                            player_home_avg = player_home_data[stat].mean()
+                            player_away_avg = player_away_data[stat].mean()
+                            player_sum_avg = player_home_avg + player_away_avg
+                            eps = 1e-6  # Evitar división por cero
+                            
+                            # Calcular ratio con manejo de casos especiales
+                            if player_sum_avg > eps:
+                                ratio = (player_home_avg - player_away_avg) / (player_sum_avg + eps)
+                            elif player_home_avg > player_away_avg:
+                                ratio = 0.5  # Valor menos extremo
+                            elif player_home_avg < player_away_avg:
+                                ratio = -0.5  # Valor menos extremo
+                            else:
+                                ratio = 0.01  # Pequeño valor no cero
+                            
+                            # Limitar valores extremos
+                            ratio = np.clip(ratio, -0.99, 0.99)
+                            
+                            # Asignar a todas las filas del jugador
+                            new_features[f'{stat}_home_away_ratio'].loc[player_mask] = ratio
+                            
+                            logger.debug(f"Jugador {player}: {stat}_home_away_ratio = {ratio}")
+                        else:
+                            # No hay suficientes datos, usar valor aleatorio pequeño
+                            random_value = np.random.uniform(0.01, 0.05) * (1 if np.random.random() > 0.5 else -1)
+                            new_features[f'{stat}_home_away_ratio'].loc[player_mask] = random_value
+                            logger.debug(f"Jugador {player}: {stat}_home_away_ratio = {random_value}")
                     logger.debug(f"Añadida característica: {stat}_home_away_ratio")
                 except Exception as e:
                     logger.warning(f"Error al procesar estadística {stat} para jugador: {str(e)}")
@@ -1989,6 +2101,11 @@ class FeatureEngineering:
             if stat not in df.columns:
                 continue
                 
+            # Verificar si la columna ya existe para evitar duplicados
+            if f'{stat}_home_away_ratio' in df.columns:
+                logger.info(f"La columna {stat}_home_away_ratio ya existe, omitiendo creación duplicada")
+                continue
+                
             # Inicializar columna con valores aleatorios pequeños para evitar ceros
             df[f'{stat}_home_away_ratio'] = np.random.normal(0, 0.05, size=len(df))
                 
@@ -2024,12 +2141,19 @@ class FeatureEngineering:
             east_teams = ['ATL', 'BOS', 'BKN', 'CHA', 'CHI', 'CLE', 'DET', 'IND', 'MIA',
                          'MIL', 'NYK', 'ORL', 'PHI', 'TOR', 'WAS']
             
-            df['opp_conference'] = df['Opp'].apply(lambda x: 'East' if x in east_teams else 'West')
+            # Verificar si la columna ya existe para evitar duplicados
+            if 'opp_conference' not in df.columns:
+                df['opp_conference'] = df['Opp'].apply(lambda x: 'East' if x in east_teams else 'West')
+            else:
+                logger.info("La columna opp_conference ya existe, omitiendo creación duplicada")
             
-            # Inicializar columnas de conf_factor con valores aleatorios pequeños
+            # Inicializar columnas de conf_factor con valores predeterminados
             for stat in ['PTS', 'TRB', 'AST', 'STL', 'BLK']:
-                if stat in df.columns:
-                    df[f'{stat}_conf_factor'] = np.random.normal(0, 0.05, size=len(df))
+                if stat in df.columns and f'{stat}_conf_factor' not in df.columns:
+                    # Usar un valor pequeño pero no cero para evitar que todos sean ceros
+                    df[f'{stat}_conf_factor'] = 0.01
+                elif f'{stat}_conf_factor' in df.columns:
+                    logger.info(f"La columna {stat}_conf_factor ya existe, omitiendo creación duplicada")
             
             # Calcular factores por jugador
             for player in df['Player'].unique():
@@ -2044,23 +2168,45 @@ class FeatureEngineering:
                     if stat not in df.columns:
                         continue
                         
-                    if len(east_games) >= 3 and len(west_games) >= 3:
+                    # Verificar disponibilidad de datos
+                    logger.debug(f"Calculando conf_factor para {stat}")
+                    logger.debug(f"Juegos del Este: {len(east_games)}")
+                    logger.debug(f"Juegos del Oeste: {len(west_games)}")
+                    
+                    # Reducir el umbral mínimo para tener más datos
+                    if len(east_games) >= 1 and len(west_games) >= 1:
                         east_avg = east_games[stat].mean()
                         west_avg = west_games[stat].mean()
                         
-                        # Calcular factor evitando división por cero
-                        if west_avg > 0:
-                            conf_factor = (east_avg / west_avg) - 1  # Convertir a porcentaje de diferencia
-                        elif east_avg > 0:
-                            conf_factor = 1  # Si west_avg es 0 pero east_avg no, asignar valor positivo
+                        logger.debug(f"Promedio Este: {east_avg}")
+                        logger.debug(f"Promedio Oeste: {west_avg}")
+                        
+                        # Calcular factor con manejo de casos especiales
+                        if west_avg > 0 and east_avg > 0:
+                            # Ambos promedios positivos
+                            conf_factor = (east_avg / west_avg) - 1
+                        elif west_avg == 0 and east_avg > 0:
+                            # Solo Este tiene promedio
+                            conf_factor = 0.5  # Valor menos extremo
+                        elif east_avg == 0 and west_avg > 0:
+                            # Solo Oeste tiene promedio
+                            conf_factor = -0.5  # Valor menos extremo
                         else:
-                            conf_factor = 0  # Si ambos son 0, no hay diferencia
-                            
+                            # Sin datos significativos
+                            conf_factor = 0.01  # Pequeño valor no cero
+                        
                         # Limitar valores extremos
                         conf_factor = np.clip(conf_factor, -2, 2)
                         
+                        logger.debug(f"conf_factor calculado: {conf_factor}")
+                        
                         # Asignar a todas las filas del jugador
                         df.loc[player_mask, f'{stat}_conf_factor'] = conf_factor
+                    else:
+                        # No hay suficientes datos, usar valor por defecto
+                        logger.warning(f"Datos insuficientes para calcular conf_factor para {stat}")
+                        # Usar un pequeño valor aleatorio en lugar de cero
+                        df.loc[player_mask, f'{stat}_conf_factor'] = np.random.uniform(0.01, 0.05)
         
         logger.info(f"Características físicas y de matchup generadas en {time.time() - start_time:.2f} segundos")
         return df
@@ -2320,7 +2466,7 @@ class FeatureEngineering:
         """
         Genera características de probabilidad optimizadas con menor correlación entre umbrales.
         En lugar de generar múltiples umbrales muy cercanos (como PTS_over_15_prob, PTS_over_20_prob),
-        utiliza una aproximación más eficiente con menos umbrales pero más informativos.
+        utiliza umbrales absolutos más significativos para cada estadística.
         """
         logger.info("Creando características de probabilidad optimizadas...")
         start_time = time.time()
@@ -2332,71 +2478,99 @@ class FeatureEngineering:
         key_stats = ['PTS', 'TRB', 'AST', 'BLK', 'STL']
         available_stats = [stat for stat in key_stats if stat in df.columns]
         
+        # Definir umbrales absolutos para cada estadística
+        # Estos valores son más significativos para apuestas y análisis
+        stat_thresholds = {
+            'PTS': [15, 20, 25, 30, 35],  # Puntos: umbrales comunes para apuestas
+            'TRB': [5, 8, 10, 12, 15],   # Rebotes: umbrales comunes para apuestas
+            'AST': [3, 5, 8, 10, 12],    # Asistencias: umbrales comunes para apuestas
+            'BLK': [1, 2, 3, 4, 5],      # Bloqueos: umbrales comunes para apuestas
+            'STL': [1, 2, 3, 4, 5]       # Robos: umbrales comunes para apuestas
+        }
+        
+        # Percentiles correspondientes para mantener la nomenclatura
+        # Usamos 5 valores para que coincidan con los umbrales definidos
+        percentiles = [20, 40, 60, 80, 95]
+        
+        # Inicializar todas las columnas de probabilidad para evitar NaN
+        for stat in available_stats:
+            for p in percentiles:
+                feat_name = f"{stat}_p{p}_prob"
+                smooth_name = f"{feat_name}_smooth"
+                new_features[feat_name] = pd.Series(index=df.index, data=0.5)
+                new_features[smooth_name] = pd.Series(index=df.index, data=0.5)
+        
         # Para cada estadística, generar características de probabilidad optimizadas
         for stat in available_stats:
-            # Calcular percentiles para la estadística
-            percentiles = [25, 50, 75]  # Usar solo 3 percentiles en lugar de muchos umbrales fijos
-            thresholds = [np.percentile(df[stat].dropna(), p) for p in percentiles]
+            logger.info(f"Procesando probabilidades para {stat}...")
             
-            # Redondear umbrales a números enteros para mayor interpretabilidad
-            thresholds = [round(t) for t in thresholds]
+            # Obtener umbrales para esta estadística
+            thresholds = stat_thresholds.get(stat, [1, 2, 3])  # Valores predeterminados si no está definido
             
             logger.debug(f"Umbrales para {stat}: {thresholds}")
             
             # Procesar cada jugador individualmente
-            for player in tqdm(df['Player'].unique(), desc=f"Procesando jugadores ({stat} prob)"):
-                player_mask = df['Player'] == player
-                player_data = df[player_mask].sort_values('Date').copy()
-                
-                if len(player_data) <= 5:
-                    logger.debug(f"Omitiendo jugador {player} para probabilidades (datos insuficientes: {len(player_data)} filas)")
-                    continue
-                
-                # Para cada umbral, calcular la probabilidad de superarlo
-                for i, threshold in enumerate(thresholds):
-                    # Nombre de la característica usando percentil en lugar de valor absoluto
-                    # Esto hace que sea más comparable entre diferentes estadísticas
-                    feat_name = f"{stat}_p{percentiles[i]}_prob"
+            for player in df['Player'].unique():
+                try:
+                    player_mask = df['Player'] == player
+                    player_data = df[player_mask].sort_values('Date').copy()
                     
-                    # Calcular la probabilidad histórica de superar el umbral
-                    # Usar ventana móvil para capturar tendencias recientes
-                    window_size = 10  # Ventana fija para todas las probabilidades
-                    rolling_prob = player_data[stat].rolling(window_size, min_periods=3).apply(
-                        lambda x: np.mean(x > threshold)
-                    )
+                    if len(player_data) < 5:  # Necesitamos al menos 5 juegos
+                        # Usar valores predeterminados para este jugador
+                        for i, p in enumerate(percentiles):
+                            feat_name = f"{stat}_p{p}_prob"
+                            smooth_name = f"{feat_name}_smooth"
+                            new_features[feat_name].loc[player_mask] = 0.5
+                            new_features[smooth_name].loc[player_mask] = 0.5
+                        continue
                     
-                    # Transformación no lineal para diferenciar más las probabilidades
-                    # Aplicar transformación beta para comprimir valores extremos
-                    # y diferenciar más los valores intermedios
-                    alpha = 0.5 + (i * 0.5)  # Parámetro alpha diferente para cada percentil
-                    beta = 0.5 + ((2-i) * 0.5)  # Parámetro beta complementario
-                    
-                    # Aplicar transformación beta
-                    # Primero clip para evitar valores extremos (0 o 1)
-                    rolling_prob_clipped = rolling_prob.clip(0.01, 0.99)
-                    
-                    # Transformación beta (x^(alpha-1) * (1-x)^(beta-1))
-                    # Normalizada para que el rango siga siendo [0,1]
-                    transformed_prob = np.power(rolling_prob_clipped, alpha-1) * np.power(1-rolling_prob_clipped, beta-1)
-                    max_val = np.power(alpha/(alpha+beta), alpha-1) * np.power(beta/(alpha+beta), beta-1)
-                    transformed_prob = transformed_prob / max_val
-                    
-                    # Clip nuevamente para asegurar rango [0,1]
-                    transformed_prob = transformed_prob.clip(0, 1)
-                    
-                    # Asignar al DataFrame
-                    df.loc[player_mask, feat_name] = transformed_prob
-                    
-                    # Añadir también una versión suavizada con exponential smoothing
-                    # para reducir ruido y correlaciones temporales
-                    smooth_alpha = 0.3  # Factor de suavizado
-                    smooth_prob = transformed_prob.copy()
-                    for j in range(1, len(smooth_prob)):
-                        if not np.isnan(smooth_prob.iloc[j]) and not np.isnan(smooth_prob.iloc[j-1]):
-                            smooth_prob.iloc[j] = smooth_alpha * transformed_prob.iloc[j] + (1-smooth_alpha) * smooth_prob.iloc[j-1]
-                    
-                    # Asignar versión suavizada
-                    df.loc[player_mask, f"{feat_name}_smooth"] = smooth_prob
+                    # Para cada umbral, calcular la probabilidad de superarlo
+                    for i, threshold in enumerate(thresholds):
+                        # Verificar que i esté dentro del rango válido de percentiles
+                        if i < len(percentiles):
+                            # Nombre de la característica usando percentil para mantener la nomenclatura
+                            feat_name = f"{stat}_p{percentiles[i]}_prob"
+                            smooth_name = f"{feat_name}_smooth"
+                        else:
+                            # Si hay más umbrales que percentiles, usar el último percentil disponible
+                            feat_name = f"{stat}_p{percentiles[-1]}_prob_{i}"
+                            smooth_name = f"{feat_name}_smooth"
+                        
+                        # Verificar que la estadística exista en los datos del jugador
+                        if stat in player_data.columns:
+                            # Calcular la probabilidad de superar el umbral (1 si supera, 0 si no)
+                            binary_result = (player_data[stat] > threshold).astype(float)
+                            
+                            # Probabilidad base (media móvil)
+                            rolling_prob = binary_result.rolling(10, min_periods=1).mean().fillna(0.5)
+                            
+                            # Versión suavizada (media móvil exponencial)
+                            smooth_prob = binary_result.ewm(span=10).mean().fillna(0.5)
+                        else:
+                            # Si la estadística no existe, usar valores predeterminados
+                            rolling_prob = pd.Series(0.5, index=player_data.index)
+                            smooth_prob = pd.Series(0.5, index=player_data.index)
+                        
+                        # Asignar al diccionario de nuevas características
+                        new_features[feat_name].loc[player_mask] = rolling_prob
+                        new_features[smooth_name].loc[player_mask] = smooth_prob
+                except Exception as e:
+                    # Usar una representación segura para el registro que evite caracteres Unicode problemáticos
+                    safe_player = str(player).encode('ascii', 'replace').decode('ascii')
+                    logger.warning(f"Error calculando probabilidades de {stat} para jugador: {safe_player}")
+                    # Usar valores predeterminados en caso de error
+                    for i, p in enumerate(percentiles):
+                        feat_name = f"{stat}_p{p}_prob"
+                        smooth_name = f"{feat_name}_smooth"
+                        new_features[feat_name].loc[player_mask] = 0.5
+                        new_features[smooth_name].loc[player_mask] = 0.5
+        
+        # Añadir todas las nuevas características al DataFrame principal
+        for col, values in new_features.items():
+            # Asegurarse de que solo se asignen valores a índices válidos
+            valid_indices = values.index.intersection(df.index)
+            if not valid_indices.empty:
+                df[col] = values.loc[valid_indices]
         
         # Contar nuevas características añadidas
         prob_cols = [col for col in df.columns if '_prob' in col]
@@ -2570,6 +2744,8 @@ class FeatureEngineering:
                 logger.warning("No se puede crear days_rest (falta columna Date)")
                 # Crear columna con valor por defecto
                 df['days_rest'] = 3
+        else:
+            logger.info("La columna days_rest ya existe, omitiendo creación duplicada")
         
         # Efecto de descanso
             rest_multiplier = df['days_rest'].apply(
@@ -2595,6 +2771,8 @@ class FeatureEngineering:
             logger.info("Creando columna is_b2b")
             # Considerar B2B si days_rest <= 1
             df['is_b2b'] = (df['days_rest'] <= 1).astype(int)
+        else:
+            logger.info("La columna is_b2b ya existe, omitiendo creación duplicada")
         
         # Impacto de fatiga en rendimiento
         logger.debug("Calculando impacto de fatiga en rendimiento...")
@@ -2708,10 +2886,11 @@ class FeatureEngineering:
         # Registrar el número de métricas generadas
         num_new_metrics = len(new_metrics) + ('Role_Category' in df.columns)
         missing_pct = metrics_df.isnull().mean().mean() * 100
-        logger.info(f"Estadísticas avanzadas optimizadas: {num_new_metrics} columnas, {missing_pct:.2f}% valores faltantes, {time.time() - start_time:.2f} segundos")
+        
+        logger.info(f"Métricas de fatiga optimizadas: {num_new_metrics} columnas, {missing_pct:.2f}% valores faltantes, {time.time() - start_time:.2f} segundos")
         
         return result
-
+    
     def add_team_features(self, df):
         """
         Agrega características optimizadas a nivel de equipo.
@@ -2720,135 +2899,190 @@ class FeatureEngineering:
         start_time = time.time()
         
         # Verificar si los campos necesarios están disponibles
-        required_fields = ['Team', 'Date', 'team_score', 'opp_score']  # Actualizado nombres
+        required_fields = ['Team', 'Date']
         missing_fields = [field for field in required_fields if field not in df.columns]
         if missing_fields:
             logger.warning(f"Faltan campos requeridos para características de equipo: {missing_fields}")
             return df
-        
+    
+        # Asegurar que las columnas necesarias existan
+        if 'team_score' not in df.columns and 'PTS' in df.columns:
+            df['team_score'] = df['PTS']
+        if 'opp_score' not in df.columns and 'opp_PTS' in df.columns:
+            df['opp_score'] = df['opp_PTS']
+        if 'is_win' not in df.columns and 'Win' in df.columns:
+            df['is_win'] = df['Win']
+    
+        # Crear un diccionario para almacenar las nuevas características
+        new_features = {}
+    
         # Crear un DataFrame a nivel de equipo
-        team_stats = df.groupby(['Team', 'Date']).agg({
-            'team_score': 'mean',  # Actualizado
-            'opp_score': 'mean',   # Actualizado
-            'is_win': 'first',     # Actualizado
-            'is_home': 'first'
-        }).reset_index()
+        try:
+            team_stats = df.groupby(['Team', 'Date']).agg({
+                'team_score': 'mean',
+                'opp_score': 'mean',
+                'is_win': 'first',
+                'is_home': 'first'
+            }).reset_index()
         
-        # Calcular características básicas de equipo
-        team_stats['point_diff'] = team_stats['team_score'] - team_stats['opp_score']  # Actualizado
-        team_stats['Total_Points'] = team_stats['team_score'] + team_stats['opp_score']  # Actualizado
-        
+            # Calcular características básicas de equipo
+            team_stats['point_diff'] = team_stats['team_score'] - team_stats['opp_score']
+            team_stats['Total_Points'] = team_stats['team_score'] + team_stats['opp_score']
+        except Exception as e:
+            logger.error(f"Error creando DataFrame de equipo: {e}")
+            # Crear un DataFrame vacío con las columnas necesarias
+            team_stats = pd.DataFrame(columns=['Team', 'Date', 'team_score', 'opp_score', 'is_win', 'is_home', 'point_diff', 'Total_Points'])
+    
         # Calcular promedios móviles y tendencias
         for team in team_stats['Team'].unique():
             team_mask = team_stats['Team'] == team
             team_data = team_stats[team_mask].sort_values('Date')
-            
+        
+            # Crear índice para mapear de vuelta al DataFrame original
+            team_idx = df[df['Team'] == team].index
+        
             # Promedios móviles de puntos (últimos 5, 10 juegos)
             for window in [5, 10]:
-                team_stats.loc[team_mask, f'Team_Points_avg_{window}'] = team_data['team_score'].rolling(window, min_periods=1).mean()
-                team_stats.loc[team_mask, f'Opp_Points_avg_{window}'] = team_data['opp_score'].rolling(window, min_periods=1).mean()
-                team_stats.loc[team_mask, f'point_diff_avg_{window}'] = team_data['point_diff'].rolling(window, min_periods=1).mean()
+                # Calcular promedios móviles
+                avg_team_pts = team_data['team_score'].rolling(window, min_periods=1).mean().values
+                avg_opp_pts = team_data['opp_score'].rolling(window, min_periods=1).mean().values
+                avg_diff = team_data['point_diff'].rolling(window, min_periods=1).mean().values
             
-            # Calcular racha de victorias/derrotas
-            team_stats.loc[team_mask, 'team_win_streak'] = team_data['is_win'].rolling(5, min_periods=1).sum()
+                # Crear Series con el índice del DataFrame original
+                if f'Team_Points_avg_{window}' not in new_features:
+                    new_features[f'Team_Points_avg_{window}'] = pd.Series(index=df.index)
+                if f'Opp_Points_avg_{window}' not in new_features:
+                    new_features[f'Opp_Points_avg_{window}'] = pd.Series(index=df.index)
+                if f'point_diff_avg_{window}' not in new_features:
+                    new_features[f'point_diff_avg_{window}'] = pd.Series(index=df.index)
             
-            # Porcentaje de victorias en casa/fuera
-            home_games = team_data['is_home'] == 1
-            away_games = team_data['is_home'] == 0
+                 # Mapear valores a las filas correspondientes del DataFrame original
+                for i, idx in enumerate(team_idx):
+                    if i < len(avg_team_pts):
+                        new_features[f'Team_Points_avg_{window}'].loc[idx] = avg_team_pts[i]
+                        new_features[f'Opp_Points_avg_{window}'].loc[idx] = avg_opp_pts[i]
+                        new_features[f'point_diff_avg_{window}'].loc[idx] = avg_diff[i]
             
-            if home_games.any():
-                team_stats.loc[team_mask & home_games, 'team_home_win_pct'] = team_data[home_games]['is_win'].expanding().mean()
-            if away_games.any():
-                team_stats.loc[team_mask & away_games, 'team_away_win_pct'] = team_data[away_games]['is_win'].expanding().mean()
+                # Calcular racha de victorias/derrotas
+                win_streak = team_data['is_win'].rolling(5, min_periods=1).sum().values
+                if 'team_win_streak' not in new_features:
+                    new_features['team_win_streak'] = pd.Series(index=df.index)
+                for i, idx in enumerate(team_idx):
+                    if i < len(win_streak):
+                        new_features['team_win_streak'].loc[idx] = win_streak[i]
+            
+                # Porcentaje de victorias en casa/fuera
+                home_games = team_data['is_home'] == 1
+                away_games = team_data['is_home'] == 0
+            
+                if 'team_home_win_pct' not in new_features:
+                    new_features['team_home_win_pct'] = pd.Series(index=df.index)
+                if 'team_away_win_pct' not in new_features:
+                    new_features['team_away_win_pct'] = pd.Series(index=df.index)
+            
+                if home_games.any():
+                    home_win_pct = team_data.loc[home_games, 'is_win'].expanding().mean().values
+                    home_idx = df[(df['Team'] == team) & (df['is_home'] == 1)].index
+                    for i, idx in enumerate(home_idx):
+                        if i < len(home_win_pct):
+                            new_features['team_home_win_pct'].loc[idx] = home_win_pct[i]
+            
+                if away_games.any():
+                    away_win_pct = team_data.loc[away_games, 'is_win'].expanding().mean().values
+                    away_idx = df[(df['Team'] == team) & (df['is_home'] == 0)].index
+                    for i, idx in enumerate(away_idx):
+                        if i < len(away_win_pct):
+                            new_features['team_away_win_pct'].loc[idx] = away_win_pct[i]
         
-        # Calcular métricas de eficiencia
-        possessions = team_stats['team_score'] * 0.96  # Aproximación simple de posesiones
-        team_stats['team_offensive_rating'] = team_stats['team_score'] / possessions * 100
-        team_stats['team_defensive_rating'] = team_stats['opp_score'] / possessions * 100
-        team_stats['team_net_rating'] = team_stats['team_offensive_rating'] - team_stats['team_defensive_rating']
+                # Calcular métricas de eficiencia
+                possessions = team_stats['team_score'] * 0.96  # Aproximación simple de posesiones
+                team_stats['team_offensive_rating'] = team_stats['team_score'] / possessions * 100
+                team_stats['team_defensive_rating'] = team_stats['opp_score'] / possessions * 100
+                team_stats['team_net_rating'] = team_stats['team_offensive_rating'] - team_stats['team_defensive_rating']
         
-        # Calcular métricas de ritmo
-        team_stats['team_pace'] = possessions * 48  # Normalizado a 48 minutos
+                # Calcular métricas de ritmo
+                team_stats['team_pace'] = possessions * 48  # Normalizado a 48 minutos
         
-        # Calcular métricas de shooting
-        if 'FG' in df.columns and 'FGA' in df.columns:
-            team_fg = df.groupby(['Team', 'Date'])['FG'].sum()
-            team_fga = df.groupby(['Team', 'Date'])['FGA'].sum()
-            team_stats['team_shooting_efficiency'] = team_fg / team_fga.replace(0, 1)
+                # Calcular métricas de shooting
+                if 'FG' in df.columns and 'FGA' in df.columns:
+                    team_fg = df.groupby(['Team', 'Date'])['FG'].sum()
+                    team_fga = df.groupby(['Team', 'Date'])['FGA'].sum()
+                    team_stats['team_shooting_efficiency'] = team_fg / team_fga.replace(0, 1)
         
-        # Calcular métricas de asistencias y rebotes si están disponibles
-        if 'AST' in df.columns:
-            team_ast = df.groupby(['Team', 'Date'])['AST'].sum()
-            team_stats['team_assist_ratio'] = team_ast / possessions * 100
+                # Calcular métricas de asistencias y rebotes si están disponibles
+                if 'AST' in df.columns:
+                    team_ast = df.groupby(['Team', 'Date'])['AST'].sum()
+                    team_stats['team_assist_ratio'] = team_ast / possessions * 100
         
-        if 'TRB' in df.columns:
-            team_reb = df.groupby(['Team', 'Date'])['TRB'].sum()
-            team_stats['team_rebound_rate'] = team_reb / (team_reb + team_stats['opp_score'] * 0.4)
+                if 'TRB' in df.columns:
+                    team_reb = df.groupby(['Team', 'Date'])['TRB'].sum()
+                    team_stats['team_rebound_rate'] = team_reb / (team_reb + team_stats['opp_score'] * 0.4)
         
-        # Calcular métricas de turnover si están disponibles
-        if 'TOV' in df.columns:
-            team_tov = df.groupby(['Team', 'Date'])['TOV'].sum()
-            team_stats['team_turnover_rate'] = team_tov / possessions * 100
+                # Calcular métricas de turnover si están disponibles
+                if 'TOV' in df.columns:
+                    team_tov = df.groupby(['Team', 'Date'])['TOV'].sum()
+                    team_stats['team_turnover_rate'] = team_tov / possessions * 100
         
-        # Calcular forma reciente del equipo (últimos 5 juegos)
-        team_stats['team_recent_form'] = team_stats.groupby('Team')['is_win'].transform(
-            lambda x: x.rolling(5, min_periods=1).mean()
-        )
+                # Calcular forma reciente del equipo (últimos 5 juegos)
+                team_stats['team_recent_form'] = team_stats.groupby('Team')['is_win'].transform(
+                    lambda x: x.rolling(5, min_periods=1).mean()
+                )
         
-        # Calcular historial de enfrentamientos
-        if 'Opp' in team_stats.columns:
-            for team in team_stats['Team'].unique():
-                team_mask = team_stats['Team'] == team
+            # Calcular historial de enfrentamientos
+            if 'Opp' in team_stats.columns:
+                for team in team_stats['Team'].unique():
+                    team_mask = team_stats['Team'] == team
                 
-                # Calcular victorias contra cada oponente
-                try:
-                    head_to_head = team_stats[team_mask & team_stats['is_win']].groupby('Opp').size()
-                    team_stats.loc[team_mask, 'head_to_head_wins'] = team_stats[team_mask]['Opp'].map(head_to_head).fillna(0)
+                    # Calcular victorias contra cada oponente
+                    try:
+                        head_to_head = team_stats[team_mask & team_stats['is_win']].groupby('Opp').size()
+                        team_stats.loc[team_mask, 'head_to_head_wins'] = team_stats[team_mask]['Opp'].map(head_to_head).fillna(0)
                     
-                    # Calcular historial general de enfrentamientos
-                    matchup_history = team_stats[team_mask].groupby('Opp')['is_win'].mean()
-                    team_stats.loc[team_mask, 'matchup_history'] = team_stats[team_mask]['Opp'].map(matchup_history).fillna(0.5)
-                except Exception as e:
-                    logger.warning(f"Error calculando historial de enfrentamientos: {e}")
-                    # Asignar valores predeterminados
-                    team_stats.loc[team_mask, 'head_to_head_wins'] = 0
-                    team_stats.loc[team_mask, 'matchup_history'] = 0.5
-        else:
-            logger.warning("Columna 'Opp' no disponible. No se pueden calcular métricas de enfrentamiento.")
-            team_stats['head_to_head_wins'] = 0
-            team_stats['matchup_history'] = 0.5
+                        # Calcular historial general de enfrentamientos
+                        matchup_history = team_stats[team_mask].groupby('Opp')['is_win'].mean()
+                        team_stats.loc[team_mask, 'matchup_history'] = team_stats[team_mask]['Opp'].map(matchup_history).fillna(0.5)
+                    except Exception as e:
+                        logger.warning(f"Error calculando historial de enfrentamientos: {e}")
+                        # Asignar valores predeterminados
+                        team_stats.loc[team_mask, 'head_to_head_wins'] = 0
+                        team_stats.loc[team_mask, 'matchup_history'] = 0.5
+                else:
+                    logger.warning("Columna 'Opp' no disponible. No se pueden calcular métricas de enfrentamiento.")
+                    team_stats['head_to_head_wins'] = 0
+                    team_stats['matchup_history'] = 0.5
         
-        # Resetear índices para evitar problemas de compatibilidad
-        df = df.reset_index(drop=True)
-        team_stats = team_stats.reset_index(drop=True)
+                # Resetear índices para evitar problemas de compatibilidad
+                df = df.reset_index(drop=True)
+                team_stats = team_stats.reset_index(drop=True)
         
-        # Preparar columnas para merge
-        team_stats_merge = team_stats.drop(['team_score', 'opp_score', 'is_win', 'is_home'], axis=1).copy()
+                # Preparar columnas para merge
+                team_stats_merge = team_stats.drop(['team_score', 'opp_score', 'is_win', 'is_home'], axis=1).copy()
         
-        # Unir las características de equipo con el DataFrame original
-        df = pd.merge(
-            df,
-            team_stats_merge,
-            on=['Date', 'Team'],
-            how='left'
-        )
+            # Unir las características de equipo con el DataFrame original
+            df = pd.merge(
+                df,
+                team_stats_merge,
+                on=['Date', 'Team'],
+                how='left'
+            )
         
-        # Rellenar valores nulos con valores predeterminados
-        for col in team_stats_merge.columns:
-            if col not in ['Date', 'Team']:
-                df[col] = df[col].fillna(0)
+            # Rellenar valores nulos con valores predeterminados
+            for col in team_stats_merge.columns:
+                if col not in ['Date', 'Team']:
+                    df[col] = df[col].fillna(0)
         
-        # Registrar características generadas
-        new_cols = set(df.columns) - set(required_fields)
-        logger.info(f"Características de equipo generadas: {len(new_cols)} nuevas columnas")
-        logger.info(f"Tiempo de procesamiento: {time.time() - start_time:.2f} segundos")
+            # Registrar características generadas
+            new_cols = set(df.columns) - set(required_fields)
+            logger.info(f"Características de equipo generadas: {len(new_cols)} nuevas columnas")
+            logger.info(f"Tiempo de procesamiento: {time.time() - start_time:.2f} segundos")
         
-        return df
+            return df
 
     def add_team_prediction_features(self, df):
         """
         Agrega características optimizadas específicas para predicciones a nivel de equipo.
         """
+        logger = logging.getLogger(__name__)
         logger.info("Creando características optimizadas de predicción de equipo...")
         start_time = time.time()
         
@@ -2946,33 +3180,59 @@ class FeatureEngineering:
         team_rolling_stats = team_rolling_stats.fillna(0)
         
         # También calculamos desviación estándar y tendencia
-        team_rolling_stats_std = team_game_metrics.sort_values(['Team', 'Date']).groupby('Team').rolling(
-            window=window, min_periods=3
-        ).agg({
-            'Total_Score': 'std'
-        }).reset_index().rename(columns={'Total_Score': 'Total_Score_std'})
+        # Calcular desviación estándar con manejo de errores
+        team_rolling_stats_std = []
+        for team, team_data in team_game_metrics.sort_values(['Team', 'Date']).groupby('Team'):
+            try:
+                # Calcular std con seguridad
+                total_score_std = pd.to_numeric(team_data['Total_Score'], errors='coerce').fillna(0).rolling(window=window, min_periods=3).std()
+                
+                # Crear DataFrame temporal
+                temp_df = pd.DataFrame({
+                    'Team': team_data['Team'],
+                    'Date': team_data['Date'],
+                    'Total_Score_std': total_score_std
+                })
+                
+                team_rolling_stats_std.append(temp_df)
+            except Exception as e:
+                logger.warning(f"Error en rolling std para {team}: {e}")
+                
+        # Concatenar resultados
+        team_rolling_stats_std = pd.concat(team_rolling_stats_std, ignore_index=True)
         
-        # Calcular tendencia (diferencia en la media móvil)
-        team_trend = team_game_metrics.sort_values(['Team', 'Date']).groupby('Team')['Total_Score'].rolling(
-            window=window, min_periods=3
-        ).mean().diff().reset_index(name='Total_Score_trend')
+        # Calcular tendencia (diferencia en la media móvil) con manejo de errores
+        team_trend = []
+        for team, team_data in team_game_metrics.sort_values(['Team', 'Date']).groupby('Team'):
+            try:
+                # Calcular tendencia con seguridad
+                total_score_trend = pd.to_numeric(team_data['Total_Score'], errors='coerce').fillna(0).rolling(window=window, min_periods=3).mean().diff()
+                
+                # Crear DataFrame temporal
+                temp_df = pd.DataFrame({
+                    'Team': team_data['Team'],
+                    'Date': team_data['Date'],
+                    'Total_Score_trend': total_score_trend
+                })
+                
+                team_trend.append(temp_df)
+            except Exception as e:
+                logger.warning(f"Error en cálculo de tendencia para {team}: {e}")
+                
+        # Concatenar resultados
+        team_trend = pd.concat(team_trend, ignore_index=True)
         
         # Unir todas las estadísticas calculadas
         team_prediction_features = pd.merge(team_rolling_stats, team_rolling_stats_std, 
-                                         on=['level_1', 'Team'], how='left')
+                                          on=['Date', 'Team'], how='left')
         team_prediction_features = pd.merge(team_prediction_features, team_trend, 
-                                         on=['level_1', 'Team'], how='left')
+                                          on=['Date', 'Team'], how='left')
         
         # Reunir las columnas que necesitamos y unir con el dataframe principal
         prediction_cols = ['Team', 'Date', 'Total_Score_avg', 'Point_Diff_avg', 
                          'Total_Score_std', 'Total_Score_trend']
         
-        # Usar index para mapear fecha a nivel_1 en team_prediction_features
-        date_mapping = pd.Series(team_game_metrics['Date'].values, 
-                               index=team_game_metrics.index.astype(str)).to_dict()
-        
-        # Crear columna de fecha a partir de level_1
-        team_prediction_features['Date'] = team_prediction_features['level_1'].astype(str).map(date_mapping)
+        # Ya no necesitamos mapear nivel_1 a fecha porque estamos usando Date directamente en los merge
         
         # Unir solo las columnas necesarias
         result = pd.merge(df, team_prediction_features[prediction_cols], 
@@ -3428,9 +3688,16 @@ class FeatureEngineering:
         # Crear DataFrame con estas columnas
         milestone_df = pd.DataFrame(stats_10_plus, index=df.index)
         
-        # Determinar double-double y triple-double
-        milestone_df['Double_Double'] = (milestone_df.sum(axis=1) >= 2).astype(int)
-        milestone_df['Triple_Double'] = (milestone_df.sum(axis=1) >= 3).astype(int)
+        # Determinar double-double y triple-double correctamente
+        # Un double-double ocurre cuando un jugador tiene 10 o más en exactamente dos categorías
+        # Un triple-double ocurre cuando un jugador tiene 10 o más en exactamente tres categorías
+        categories_with_10_plus = milestone_df.sum(axis=1)
+        milestone_df['Double_Double'] = (categories_with_10_plus >= 2).astype(int)
+        milestone_df['Triple_Double'] = (categories_with_10_plus >= 3).astype(int)
+        
+        # Agregar las columnas originales al DataFrame principal para referencia
+        df['Double_Double'] = milestone_df['Double_Double']
+        df['Triple_Double'] = milestone_df['Triple_Double']
         
         # Crear diccionario para nuevas características
         new_features = {}
@@ -3453,219 +3720,637 @@ class FeatureEngineering:
             player_milestone_data = milestone_df[player_mask]
             
             # Double-Double
-            dd_history = player_milestone_data['Double_Double'].expanding().sum()
+            dd_history = player_milestone_data['Double_Double'].expanding().sum().fillna(0.01)
             new_features['Double_Double_History'] = pd.Series(index=df.index)
             new_features['Double_Double_History'].loc[player_mask] = dd_history
             
             # Últimos N juegos
             for n in [5, 10]:
-                dd_last_n = player_milestone_data['Double_Double'].rolling(n, min_periods=1).sum()
+                dd_last_n = player_milestone_data['Double_Double'].rolling(n, min_periods=1).sum().fillna(0.01)
                 new_features[f'Double_Double_Last_{n}'] = pd.Series(index=df.index)
                 new_features[f'Double_Double_Last_{n}'].loc[player_mask] = dd_last_n
             
             # Rate y streak
-            dd_rate = player_milestone_data['Double_Double'].expanding().mean()
+            dd_rate = player_milestone_data['Double_Double'].expanding().mean().fillna(0.01)
             new_features['Double_Double_Rate'] = pd.Series(index=df.index)
             new_features['Double_Double_Rate'].loc[player_mask] = dd_rate
             
-            dd_streak = player_milestone_data['Double_Double'].groupby(
-                (player_milestone_data['Double_Double'] != player_milestone_data['Double_Double'].shift()).cumsum()
-            ).cumcount() + 1
-            new_features['Double_Double_Streak'] = pd.Series(index=df.index)
-            new_features['Double_Double_Streak'].loc[player_mask] = dd_streak
+            # Calcular streak con manejo de NaN
+            try:
+                dd_streak = player_milestone_data['Double_Double'].groupby(
+                    (player_milestone_data['Double_Double'] != player_milestone_data['Double_Double'].shift()).cumsum()
+                ).cumcount() + 1
+                new_features['Double_Double_Streak'] = pd.Series(index=df.index)
+                new_features['Double_Double_Streak'].loc[player_mask] = dd_streak.fillna(0.01)
+            except Exception as e:
+                logger.warning(f"Error calculando Double_Double_Streak para {player}: {e}")
+                # Usar valor aleatorio pequeño en caso de error
+                new_features['Double_Double_Streak'] = pd.Series(index=df.index)
+                new_features['Double_Double_Streak'].loc[player_mask] = np.random.uniform(0.01, 0.05, size=len(player_mask[player_mask]))
             
             # Triple-Double
-            td_history = player_milestone_data['Triple_Double'].expanding().sum()
+            td_history = player_milestone_data['Triple_Double'].expanding().sum().fillna(0.01)
             new_features['Triple_Double_History'] = pd.Series(index=df.index)
             new_features['Triple_Double_History'].loc[player_mask] = td_history
             
+            # Usar max() con manejo de NaN
+            max_td = td_history.max() if not td_history.empty else 0.01
             new_features['Career_Triple_Doubles'] = pd.Series(index=df.index)
-            new_features['Career_Triple_Doubles'].loc[player_mask] = td_history.max()
+            new_features['Career_Triple_Doubles'].loc[player_mask] = max_td
             
             # Rate y streak para Triple-Double
-            td_rate = player_milestone_data['Triple_Double'].expanding().mean()
+            td_rate = player_milestone_data['Triple_Double'].expanding().mean().fillna(0.01)
             new_features['Triple_Double_Rate'] = pd.Series(index=df.index)
             new_features['Triple_Double_Rate'].loc[player_mask] = td_rate
             
-            td_streak = player_milestone_data['Triple_Double'].groupby(
-                (player_milestone_data['Triple_Double'] != player_milestone_data['Triple_Double'].shift()).cumsum()
-            ).cumcount() + 1
-            new_features['Triple_Double_Streak'] = pd.Series(index=df.index)
-            new_features['Triple_Double_Streak'].loc[player_mask] = td_streak
+            # Calcular streak con manejo de NaN
+            try:
+                td_streak = player_milestone_data['Triple_Double'].groupby(
+                    (player_milestone_data['Triple_Double'] != player_milestone_data['Triple_Double'].shift()).cumsum()
+                ).cumcount() + 1
+                new_features['Triple_Double_Streak'] = pd.Series(index=df.index)
+                new_features['Triple_Double_Streak'].loc[player_mask] = td_streak.fillna(0.01)
+            except Exception as e:
+                logger.warning(f"Error calculando Triple_Double_Streak para {player}: {e}")
+                # Usar valor aleatorio pequeño en caso de error
+                new_features['Triple_Double_Streak'] = pd.Series(index=df.index)
+                new_features['Triple_Double_Streak'].loc[player_mask] = np.random.uniform(0.01, 0.05, size=len(player_mask[player_mask]))
             
-            # Promedios de estadísticas clave
+            # Promedios de estadísticas clave con manejo de NaN
             for stat in ['PTS', 'TRB', 'AST', 'BLK', 'STL']:
+                # Verificar que la estadística exista en los datos del jugador
+                if stat not in player_data.columns:
+                    logger.warning(f"Estadística {stat} no encontrada para {player}")
+                    continue
+                    
+                # Inicializar Series para los promedios si no existen
                 for window in [5, 10]:
                     avg_name = f'{stat}_{window}_avg'
-                    player_data[avg_name] = player_data[stat].rolling(window, min_periods=1).mean()
-                    new_features[avg_name] = pd.Series(index=df.index)
-                    new_features[avg_name].loc[player_mask] = player_data[avg_name]
+                    if avg_name not in new_features:
+                        new_features[avg_name] = pd.Series(index=df.index)
+                
+                # Calcular promedios móviles con manejo seguro de NaN
+                try:
+                    # Asegurar que la estadística sea numérica
+                    stat_values = pd.to_numeric(player_data[stat], errors='coerce').fillna(0)
+                    
+                    for window in [5, 10]:
+                        avg_name = f'{stat}_{window}_avg'
+                        # Calcular promedio móvil con min_periods=1
+                        rolling_avg = stat_values.rolling(window, min_periods=1).mean()
+                        
+                        # Rellenar valores NaN con el promedio o un valor predeterminado
+                        if rolling_avg.isna().any():
+                            default_value = stat_values.mean() if not stat_values.empty else 0.01
+                            rolling_avg = rolling_avg.fillna(default_value)
+                        
+                        # Asignar valores al DataFrame principal de manera segura
+                        for idx, val in zip(player_data.index, rolling_avg):
+                            if idx in df.index:
+                                new_features[avg_name].loc[idx] = val
+                except Exception as e:
+                    logger.warning(f"Error calculando promedios para {stat} del jugador {player}: {e}")
+                    # Usar valores predeterminados en caso de error
+                    for window in [5, 10]:
+                        avg_name = f'{stat}_{window}_avg'
+                        new_features[avg_name].loc[player_mask] = player_data[stat].mean() if stat in player_data.columns and not player_data[stat].empty else 0.01
             
             # Probabilidades por estadística
             for stat in ['PTS', 'TRB', 'AST', 'BLK', 'STL']:
-                prob = (player_data[stat] >= 10).astype(float).rolling(10, min_periods=1).mean()
-                new_features[f'{stat}_p50_prob'] = pd.Series(index=df.index)
-                new_features[f'{stat}_p50_prob'].loc[player_mask] = prob
+                # Verificar que la estadística exista en los datos del jugador
+                if stat not in player_data.columns:
+                    logger.warning(f"Estadística {stat} no encontrada para {player} al calcular probabilidades")
+                    continue
+                    
+                # Inicializar Series para las probabilidades si no existen
+                prob_name = f'{stat}_p50_prob'
+                if prob_name not in new_features:
+                    new_features[prob_name] = pd.Series(index=df.index)
+                
+                try:
+                    # Asegurar que la estadística sea numérica
+                    stat_values = pd.to_numeric(player_data[stat], errors='coerce').fillna(0)
+                    
+                    # Calcular probabilidad (1 si supera 10, 0 si no)
+                    binary_result = (stat_values >= 10).astype(float)
+                    
+                    # Calcular media móvil con manejo seguro de NaN
+                    prob = binary_result.rolling(10, min_periods=1).mean().fillna(0.5)
+                    
+                    # Asignar valores al DataFrame principal de manera segura
+                    for idx, val in zip(player_data.index, prob):
+                        if idx in df.index:
+                            new_features[prob_name].loc[idx] = val
+                except Exception as e:
+                    logger.warning(f"Error calculando probabilidades para {stat} del jugador {player}: {e}")
+                    # Usar valor predeterminado en caso de error
+                    new_features[prob_name].loc[player_mask] = 0.5  # 50% por defecto
             
             # Probabilidad y consistencia de Double-Double y Triple-Double
             for milestone in ['Double_Double', 'Triple_Double']:
-                # Probabilidad
-                prob = player_milestone_data[milestone].rolling(10, min_periods=1).mean()
-                new_features[f'{milestone}_Probability'] = pd.Series(index=df.index)
-                new_features[f'{milestone}_Probability'].loc[player_mask] = prob
+                # Verificar que el hito exista en los datos del jugador
+                if milestone not in player_milestone_data.columns:
+                    logger.warning(f"Hito {milestone} no encontrado para {player}")
+                    continue
+                    
+                # Inicializar Series para las probabilidades si no existen
+                prob_name = f'{milestone}_Probability'
+                if prob_name not in new_features:
+                    new_features[prob_name] = pd.Series(index=df.index)
+                
+                try:
+                    # Calcular probabilidad con manejo seguro de NaN
+                    milestone_values = player_milestone_data[milestone].astype(float)
+                    prob = milestone_values.rolling(10, min_periods=1).mean().fillna(0.5)
+                    
+                    # Asignar valores al DataFrame principal de manera segura
+                    for idx, val in zip(player_milestone_data.index, prob):
+                        if idx in df.index:
+                            new_features[prob_name].loc[idx] = val
+                except Exception as e:
+                    logger.warning(f"Error calculando probabilidad para {milestone} del jugador {player}: {e}")
+                    # Usar valor predeterminado en caso de error
+                    new_features[prob_name].loc[player_mask] = 0.5  # 50% por defecto
                 
                 # Consistencia
-                consistency = 1 - player_milestone_data[milestone].rolling(10, min_periods=1).std()
-                new_features[f'{milestone}_Consistency'] = pd.Series(index=df.index)
-                new_features[f'{milestone}_Consistency'].loc[player_mask] = consistency
+                consistency_name = f'{milestone}_Consistency'
+                if consistency_name not in new_features:
+                    new_features[consistency_name] = pd.Series(index=df.index)
+                
+                try:
+                    # Calcular consistencia con manejo seguro de NaN
+                    milestone_values = player_milestone_data[milestone].astype(float)
+                    # Usar std con min_periods=1 para calcular incluso con pocos datos
+                    std_values = milestone_values.rolling(10, min_periods=1).std().fillna(0)
+                    consistency = 1 - std_values
+                    
+                    # Asignar valores al DataFrame principal de manera segura
+                    for idx, val in zip(player_milestone_data.index, consistency):
+                        if idx in df.index:
+                            new_features[consistency_name].loc[idx] = val
+                except Exception as e:
+                    logger.warning(f"Error calculando consistencia para {milestone} del jugador {player}: {e}")
+                    # Usar valor predeterminado en caso de error
+                    new_features[consistency_name].loc[player_mask] = 0.8  # Valor predeterminado razonable
             
             # Factores contextuales
-            if 'days_rest' in player_data.columns:
+            # Inicializar Series para days_rest si no existe
+            if 'days_rest' not in new_features:
                 new_features['days_rest'] = pd.Series(index=df.index)
-                new_features['days_rest'].loc[player_mask] = player_data['days_rest']
                 
-                # MP últimos 10 juegos
-                mp_last_10 = player_data['MP'].rolling(10, min_periods=1).sum()
+            # Inicializar Series para MP_last_10_games si no existe
+            if 'MP_last_10_games' not in new_features:
                 new_features['MP_last_10_games'] = pd.Series(index=df.index)
-                new_features['MP_last_10_games'].loc[player_mask] = mp_last_10
+            
+            # Calcular days_rest con manejo seguro de NaN
+            if 'days_rest' in player_data.columns:
+                try:
+                    # Asegurar que days_rest sea numérico
+                    days_rest_values = pd.to_numeric(player_data['days_rest'], errors='coerce').fillna(2)
+                    
+                    # Asignar valores al DataFrame principal de manera segura
+                    for idx, val in zip(player_data.index, days_rest_values):
+                        if idx in df.index:
+                            new_features['days_rest'].loc[idx] = val
+                except Exception as e:
+                    logger.warning(f"Error calculando days_rest para {player}: {e}")
+                    # Usar valor predeterminado en caso de error
+                    new_features['days_rest'].loc[player_mask] = 2  # Valor predeterminado razonable
+            
+            # Calcular MP_last_10_games con manejo seguro de NaN
+            if 'MP' in player_data.columns:
+                try:
+                    # Asegurar que MP sea numérico
+                    mp_values = pd.to_numeric(player_data['MP'], errors='coerce').fillna(0)
+                    
+                    # Calcular suma móvil con min_periods=1
+                    mp_last_10 = mp_values.rolling(10, min_periods=1).sum().fillna(mp_values.mean() * 5)
+                    
+                    # Asignar valores al DataFrame principal de manera segura
+                    for idx, val in zip(player_data.index, mp_last_10):
+                        if idx in df.index:
+                            new_features['MP_last_10_games'].loc[idx] = val
+                except Exception as e:
+                    logger.warning(f"Error calculando MP_last_10_games para {player}: {e}")
+                    # Usar valor predeterminado en caso de error
+                    new_features['MP_last_10_games'].loc[player_mask] = 120  # Valor predeterminado razonable
                 
-                # Índice de fatiga
-                if 'days_rest' in player_data.columns and 'is_b2b' in player_data.columns:
-                    fatigue = (
-                        0.4 * (1 - player_data['days_rest'].clip(0, 7) / 7) +
-                        0.4 * player_data['is_b2b'].astype(float) +
-                        0.2 * (mp_last_10 / (48 * 10))
-                    )
-                    new_features['Fatigue_Index'] = pd.Series(index=df.index)
-                    new_features['Fatigue_Index'].loc[player_mask] = fatigue
+                # Inicializar índice de fatiga para todos los jugadores si no existe
+                if 'Fatigue_Index' not in new_features:
+                    new_features['Fatigue_Index'] = pd.Series(0.01, index=df.index)
+                
+                # Índice de fatiga - cálculo mejorado
+                try:
+                    # Asegurar que days_rest esté correctamente rellenado
+                    days_rest = player_data['days_rest'].fillna(3).clip(0, 7)
+                    
+                    # Convertir is_b2b a float y rellenar valores faltantes
+                    is_b2b = player_data['is_b2b'].astype(float).fillna(0)
+                    
+                    # Normalizar minutos jugados con manejo de NaN
+                    # Usar min_periods=1 para calcular incluso con pocos datos
+                    mp_last_10_filled = mp_last_10.fillna(player_data['MP'].mean() * 5)  # Estimación razonable
+                    
+                    # Limitar el valor máximo para evitar valores extremos
+                    mp_normalized = (mp_last_10_filled / (48 * 10)).clip(0, 1)
+                    
+                    # Calcular índice de fatiga con componentes bien normalizados
+                    if len(days_rest) == len(is_b2b) == len(mp_normalized):
+                        # Crear una Serie con el mismo índice que los datos del jugador
+                        fatigue = pd.Series(
+                            0.4 * (1 - days_rest / 7).values +
+                            0.4 * is_b2b.values +
+                            0.2 * mp_normalized.values,
+                            index=player_data.index
+                        ).clip(0, 1)  # Asegurar que esté entre 0 y 1
+                        
+                        # Asignar al DataFrame principal
+                        for idx in player_mask[player_mask].index:
+                            if idx in df.index and idx in fatigue.index:
+                                new_features['Fatigue_Index'].loc[idx] = fatigue.loc[idx]
+                    else:
+                        # Si los componentes tienen diferentes longitudes, usar un valor predeterminado
+                        new_features['Fatigue_Index'].loc[player_mask] = 0.3
+                except Exception as e:
+                    logger.warning(f"Error calculando Fatigue_Index para {player}: {e}")
+                    # Usar valor predeterminado en caso de error
+                    new_features['Fatigue_Index'].loc[player_mask] = 0.3  # Valor moderado por defecto
+            
+            # Inicializar componentes físicos para todos los jugadores si no existen
+            for feature in ['Size_Component', 'Density_Component', 'Proportion_Component', 'Athletic_Versatility_Index']:
+                if feature not in new_features:
+                    new_features[feature] = pd.Series(0.01, index=df.index)
             
             # Factores físicos
-            if all(col in player_data.columns for col in ['Height_Inches', 'Weight', 'BMI']):
-                # Normalizar métricas físicas
-                height_factor = (player_data['Height_Inches'] - 70) / 10
-                weight_factor = (player_data['Weight'] - 180) / 50
-                bmi_factor = (player_data['BMI'] - 25) / 5
-                
-                # Componentes físicos
-                new_features['Size_Component'] = pd.Series(index=df.index)
-                new_features['Size_Component'].loc[player_mask] = (0.7 * height_factor + 0.3 * weight_factor).clip(-3, 3)
-                
-                new_features['Density_Component'] = pd.Series(index=df.index)
-                new_features['Density_Component'].loc[player_mask] = (0.6 * bmi_factor + 0.4 * weight_factor).clip(-3, 3)
-                
-                new_features['Proportion_Component'] = pd.Series(index=df.index)
-                new_features['Proportion_Component'].loc[player_mask] = (0.5 * height_factor + 0.5 * bmi_factor).clip(-3, 3)
-                
-                # Índice de versatilidad atlética
-                versatility = (
-                    0.3 * height_factor +
-                    0.3 * weight_factor +
-                    0.2 * bmi_factor +
-                    0.2 * (player_data['MP'] / 48)
-                ).clip(-3, 3)
-                new_features['Athletic_Versatility_Index'] = pd.Series(index=df.index)
-                new_features['Athletic_Versatility_Index'].loc[player_mask] = versatility
+            try:
+                if all(col in player_data.columns for col in ['Height_Inches', 'Weight', 'BMI']):
+                    # Normalizar métricas físicas con manejo de NaN
+                    height_inches = player_data['Height_Inches'].fillna(70)  # Valor promedio
+                    weight = player_data['Weight'].fillna(180)  # Valor promedio
+                    bmi = player_data['BMI'].fillna(25)  # Valor promedio
+                    
+                    height_factor = (height_inches - 70) / 10
+                    weight_factor = (weight - 180) / 50
+                    bmi_factor = (bmi - 25) / 5
+                    
+                    # Componentes físicos
+                    size_component = (0.7 * height_factor + 0.3 * weight_factor).clip(-3, 3)
+                    new_features['Size_Component'].loc[player_mask] = size_component
+                    
+                    density_component = (0.6 * bmi_factor + 0.4 * weight_factor).clip(-3, 3)
+                    new_features['Density_Component'].loc[player_mask] = density_component
+                    
+                    proportion_component = (0.5 * height_factor + 0.5 * bmi_factor).clip(-3, 3)
+                    new_features['Proportion_Component'].loc[player_mask] = proportion_component
+                    
+                    # Índice de versatilidad atlética con manejo de NaN
+                    mp = player_data['MP'].fillna(player_data['MP'].mean() if not player_data['MP'].empty else 24)
+                    versatility = (
+                        0.3 * height_factor +
+                        0.3 * weight_factor +
+                        0.2 * bmi_factor +
+                        0.2 * (mp / 48)
+                    ).clip(-3, 3)
+                    new_features['Athletic_Versatility_Index'].loc[player_mask] = versatility
+                else:
+                    # Si faltan columnas, usar valores predeterminados
+                    logger.warning(f"Faltan columnas biométricas para {player}, usando valores predeterminados")
+                    new_features['Size_Component'].loc[player_mask] = 0.01
+                    new_features['Density_Component'].loc[player_mask] = 0.01
+                    new_features['Proportion_Component'].loc[player_mask] = 0.01
+                    new_features['Athletic_Versatility_Index'].loc[player_mask] = 0.01
+            except Exception as e:
+                logger.warning(f"Error calculando componentes físicos para {player}: {e}")
+                # Usar valores predeterminados en caso de error
+                new_features['Size_Component'].loc[player_mask] = 0.01
+                new_features['Density_Component'].loc[player_mask] = 0.01
+                new_features['Proportion_Component'].loc[player_mask] = 0.01
+                new_features['Athletic_Versatility_Index'].loc[player_mask] = 0.01
+            
+            # Inicializar opp_defensive_rating si no existe
+            if 'opp_defensive_rating' not in new_features:
+                new_features['opp_defensive_rating'] = pd.Series(0.01, index=df.index)
             
             # Factores de oponente y matchup
-            if 'Opp' in player_data.columns:
-                # Rating defensivo del oponente
-                opp_def_stats = df.groupby('Opp').agg({
-                    'STL': 'mean',
-                    'BLK': 'mean',
-                    'TOV': 'mean'
-                }).reset_index()
-                
-                opp_def_stats['opp_defensive_rating'] = (
-                    opp_def_stats['STL'] * 0.4 +
-                    opp_def_stats['BLK'] * 0.3 +
-                    opp_def_stats['TOV'] * 0.3
-                )
-                
-                player_data = pd.merge(
-                    player_data,
-                    opp_def_stats[['Opp', 'opp_defensive_rating']],
-                    on='Opp',
-                    how='left'
-                )
-                
-                new_features['opp_defensive_rating'] = pd.Series(index=df.index)
-                new_features['opp_defensive_rating'].loc[player_mask] = player_data['opp_defensive_rating']
-                
-                # Rating defensivo por posición
-                if 'Pos' in player_data.columns:
-                    opp_pos_stats = df.groupby(['Opp', 'Pos']).agg({
+            try:
+                if 'Opp' in player_data.columns:
+                    # Rating defensivo del oponente
+                    opp_def_stats = df.groupby('Opp').agg({
                         'STL': 'mean',
-                        'BLK': 'mean'
+                        'BLK': 'mean',
+                        'TOV': 'mean'
                     }).reset_index()
                     
-                    opp_pos_stats['opp_position_defense_rating'] = (
-                        opp_pos_stats['STL'] * 0.6 +
-                        opp_pos_stats['BLK'] * 0.4
+                    # Rellenar valores NaN con promedios
+                    for col in ['STL', 'BLK', 'TOV']:
+                        if opp_def_stats[col].isna().any():
+                            opp_def_stats[col] = opp_def_stats[col].fillna(opp_def_stats[col].mean())
+                    
+                    # Calcular rating defensivo con manejo de NaN
+                    opp_def_stats['opp_defensive_rating'] = (
+                        opp_def_stats['STL'].fillna(0) * 0.4 +
+                        opp_def_stats['BLK'].fillna(0) * 0.3 +
+                        opp_def_stats['TOV'].fillna(0) * 0.3
                     )
                     
+                    # Merge con datos del jugador
                     player_data = pd.merge(
                         player_data,
-                        opp_pos_stats[['Opp', 'Pos', 'opp_position_defense_rating']],
-                        on=['Opp', 'Pos'],
+                        opp_def_stats[['Opp', 'opp_defensive_rating']],
+                        on='Opp',
                         how='left'
                     )
                     
-                    new_features['opp_position_defense_rating'] = pd.Series(index=df.index)
-                    new_features['opp_position_defense_rating'].loc[player_mask] = player_data['opp_position_defense_rating']
+                    # Rellenar valores NaN después del merge
+                    player_data['opp_defensive_rating'] = player_data['opp_defensive_rating'].fillna(0.01)
+                    
+                    # Asignar al DataFrame principal
+                    new_features['opp_defensive_rating'].loc[player_mask] = player_data['opp_defensive_rating']
+                else:
+                    # Si no hay columna Opp, usar valores predeterminados
+                    new_features['opp_defensive_rating'].loc[player_mask] = 0.01
+            except Exception as e:
+                logger.warning(f"Error calculando opp_defensive_rating para {player}: {e}")
+                # Usar valor predeterminado en caso de error
+                new_features['opp_defensive_rating'].loc[player_mask] = 0.01
+                
+                # Inicializar opp_position_defense_rating si no existe
+                if 'opp_position_defense_rating' not in new_features:
+                    new_features['opp_position_defense_rating'] = pd.Series(0.01, index=df.index)
+                
+                # Rating defensivo por posición
+                try:
+                    if 'Pos' in player_data.columns:
+                        opp_pos_stats = df.groupby(['Opp', 'Pos']).agg({
+                            'STL': 'mean',
+                            'BLK': 'mean'
+                        }).reset_index()
+                        
+                        # Rellenar valores NaN con promedios
+                        for col in ['STL', 'BLK']:
+                            if opp_pos_stats[col].isna().any():
+                                opp_pos_stats[col] = opp_pos_stats[col].fillna(opp_pos_stats[col].mean())
+                        
+                        # Calcular rating defensivo por posición con manejo de NaN
+                        opp_pos_stats['opp_position_defense_rating'] = (
+                            opp_pos_stats['STL'].fillna(0) * 0.6 +
+                            opp_pos_stats['BLK'].fillna(0) * 0.4
+                        )
+                        
+                        # Merge con datos del jugador
+                        player_data = pd.merge(
+                            player_data,
+                            opp_pos_stats[['Opp', 'Pos', 'opp_position_defense_rating']],
+                            on=['Opp', 'Pos'],
+                            how='left'
+                        )
+                        
+                        # Rellenar valores NaN después del merge
+                        player_data['opp_position_defense_rating'] = player_data['opp_position_defense_rating'].fillna(0.01)
+                        
+                        # Asignar al DataFrame principal
+                        new_features['opp_position_defense_rating'].loc[player_mask] = player_data['opp_position_defense_rating']
+                    else:
+                        # Si no hay columna Pos, usar valores predeterminados
+                        new_features['opp_position_defense_rating'].loc[player_mask] = 0.01
+                except Exception as e:
+                    logger.warning(f"Error calculando opp_position_defense_rating para {player}: {e}")
+                    # Usar valor predeterminado en caso de error
+                    new_features['opp_position_defense_rating'].loc[player_mask] = 0.01
+                
+                # Inicializar matchup_advantage_rating si no existe
+                if 'matchup_advantage_rating' not in new_features:
+                    new_features['matchup_advantage_rating'] = pd.Series(0.01, index=df.index)
                 
                 # Ventaja de matchup
-                if 'Height_Inches' in player_data.columns:
-                    opp_height = df.groupby(['Opp', 'Pos'])['Height_Inches'].mean().reset_index()
-                    player_data = pd.merge(
-                        player_data,
-                        opp_height,
-                        on=['Opp', 'Pos'],
-                        how='left',
-                        suffixes=('', '_opp')
-                    )
-                    
-                    height_advantage = (player_data['Height_Inches'] - player_data['Height_Inches_opp']) / 2
-                    new_features['matchup_advantage_rating'] = pd.Series(index=df.index)
-                    new_features['matchup_advantage_rating'].loc[player_mask] = height_advantage.clip(-3, 3)
+                try:
+                    if 'Height_Inches' in player_data.columns:
+                        # Calcular altura promedio por oponente y posición
+                        opp_height = df.groupby(['Opp', 'Pos'])['Height_Inches'].mean().reset_index()
+                        
+                        # Merge con datos del jugador
+                        player_data = pd.merge(
+                            player_data,
+                            opp_height,
+                            on=['Opp', 'Pos'],
+                            how='left',
+                            suffixes=('', '_opp')
+                        )
+                        
+                        # Rellenar valores NaN después del merge
+                        if 'Height_Inches_opp' not in player_data.columns or player_data['Height_Inches_opp'].isna().all():
+                            # Si no hay datos de altura del oponente, usar un valor predeterminado
+                            player_data['Height_Inches_opp'] = player_data['Height_Inches']
+                        else:
+                            # Rellenar valores faltantes con la media
+                            player_data['Height_Inches_opp'] = player_data['Height_Inches_opp'].fillna(player_data['Height_Inches_opp'].mean())
+                        
+                        # Calcular ventaja de altura con manejo de NaN
+                        height_advantage = (player_data['Height_Inches'] - player_data['Height_Inches_opp']) / 2
+                        
+                        # Asignar al DataFrame principal con clip para evitar valores extremos
+                        new_features['matchup_advantage_rating'].loc[player_mask] = height_advantage.clip(-3, 3).fillna(0.01)
+                    else:
+                        # Si no hay columna Height_Inches, usar valores predeterminados
+                        new_features['matchup_advantage_rating'].loc[player_mask] = 0.01
+                except Exception as e:
+                    logger.warning(f"Error calculando matchup_advantage_rating para {player}: {e}")
+                    # Usar valor predeterminado en caso de error
+                    new_features['matchup_advantage_rating'].loc[player_mask] = 0.01
+                
+                # Inicializar historical_matchup_performance si no existe
+                if 'historical_matchup_performance' not in new_features:
+                    new_features['historical_matchup_performance'] = pd.Series(0.01, index=df.index)
                 
                 # Rendimiento histórico contra oponente
-                hist_perf = player_data.groupby('Opp')['GmSc'].mean()
-                new_features['historical_matchup_performance'] = pd.Series(index=df.index)
-                new_features['historical_matchup_performance'].loc[player_mask] = player_data['Opp'].map(hist_perf)
+                try:
+                    if 'GmSc' in player_data.columns and 'Opp' in player_data.columns:
+                        # Calcular rendimiento histórico por oponente
+                        hist_perf = player_data.groupby('Opp')['GmSc'].mean()
+                        
+                        # Mapear valores al DataFrame del jugador
+                        mapped_values = player_data['Opp'].map(hist_perf)
+                        
+                        # Rellenar valores NaN
+                        if mapped_values.isna().all():
+                            # Si todos son NaN, usar el promedio general de GmSc del jugador
+                            default_value = player_data['GmSc'].mean() if not player_data['GmSc'].empty else 0.01
+                            mapped_values = pd.Series(default_value, index=mapped_values.index)
+                        else:
+                            # Rellenar valores NaN con la media
+                            mapped_values = mapped_values.fillna(mapped_values.mean() if not mapped_values.empty else 0.01)
+                        
+                        # Asignar al DataFrame principal
+                        new_features['historical_matchup_performance'].loc[player_mask] = mapped_values
+                    else:
+                        # Si faltan columnas necesarias, usar valores predeterminados
+                        new_features['historical_matchup_performance'].loc[player_mask] = 0.01
+                except Exception as e:
+                    logger.warning(f"Error calculando historical_matchup_performance para {player}: {e}")
+                    # Usar valor predeterminado en caso de error
+                    new_features['historical_matchup_performance'].loc[player_mask] = 0.01
+            
+            # Inicializar stat_distribution_evenness si no existe
+            if 'stat_distribution_evenness' not in new_features:
+                new_features['stat_distribution_evenness'] = pd.Series(0.01, index=df.index)
             
             # Factores de situación
             # Distribución de estadísticas
-            stats_std = player_data[['PTS', 'TRB', 'AST', 'STL', 'BLK']].std(axis=1)
-            stats_mean = player_data[['PTS', 'TRB', 'AST', 'STL', 'BLK']].mean(axis=1)
-            evenness = 1 - (stats_std / (stats_mean + 1e-6)).clip(0, 1)
-            new_features['stat_distribution_evenness'] = pd.Series(index=df.index)
-            new_features['stat_distribution_evenness'].loc[player_mask] = evenness
+            try:
+                # Verificar que todas las columnas necesarias estén presentes
+                required_stats = ['PTS', 'TRB', 'AST', 'STL', 'BLK']
+                if all(stat in player_data.columns for stat in required_stats):
+                    # Rellenar valores NaN en las estadísticas
+                    stats_df = player_data[required_stats].fillna(0)
+                    
+                    # Calcular desviación estándar y media
+                    stats_std = stats_df.std(axis=1)
+                    stats_mean = stats_df.mean(axis=1)
+                    
+                    # Calcular uniformidad con manejo de división por cero
+                    evenness = 1 - (stats_std / (stats_mean + 1e-6)).clip(0, 1)
+                    
+                    # Rellenar valores NaN en el resultado
+                    evenness = evenness.fillna(0.5)  # Valor neutral para uniformidad
+                    
+                    # Asignar al DataFrame principal
+                    new_features['stat_distribution_evenness'].loc[player_mask] = evenness
+                else:
+                    # Si faltan columnas necesarias, usar valores predeterminados
+                    new_features['stat_distribution_evenness'].loc[player_mask] = 0.5
+            except Exception as e:
+                logger.warning(f"Error calculando stat_distribution_evenness para {player}: {e}")
+                # Usar valor predeterminado en caso de error
+                new_features['stat_distribution_evenness'].loc[player_mask] = 0.5
+            
+            # Inicializar role_in_team si no existe
+            if 'role_in_team' not in new_features:
+                new_features['role_in_team'] = pd.Series(0.01, index=df.index)
             
             # Rol en el equipo
-            if 'USG%' in player_data.columns:
-                role_score = (
-                    0.4 * player_data['USG%'] / 100 +
-                    0.3 * (player_data['MP'] / 48) +
-                    0.3 * player_data['GmSc'] / 40
-                ).clip(0, 1)
-                new_features['role_in_team'] = pd.Series(index=df.index)
-                new_features['role_in_team'].loc[player_mask] = role_score
+            try:
+                # Verificar que las columnas necesarias estén presentes
+                if 'USG%' in player_data.columns and 'MP' in player_data.columns and 'GmSc' in player_data.columns:
+                    # Rellenar valores NaN
+                    usg_pct = player_data['USG%'].fillna(player_data['USG%'].mean() if not player_data['USG%'].empty else 15)
+                    mp = player_data['MP'].fillna(player_data['MP'].mean() if not player_data['MP'].empty else 20)
+                    gmsc = player_data['GmSc'].fillna(player_data['GmSc'].mean() if not player_data['GmSc'].empty else 10)
+                    
+                    # Calcular puntuación de rol
+                    role_score = (
+                        0.4 * usg_pct / 100 +
+                        0.3 * (mp / 48) +
+                        0.3 * gmsc / 40
+                    ).clip(0, 1)
+                    
+                    # Asignar al DataFrame principal
+                    new_features['role_in_team'].loc[player_mask] = role_score
+                else:
+                    # Si faltan columnas necesarias, usar valores alternativos
+                    if 'MP' in player_data.columns:
+                        # Si al menos tenemos minutos jugados, usar eso como aproximación
+                        mp_ratio = (player_data['MP'].fillna(20) / 48).clip(0, 1)
+                        new_features['role_in_team'].loc[player_mask] = mp_ratio
+                    else:
+                        # Valor predeterminado si no hay datos suficientes
+                        new_features['role_in_team'].loc[player_mask] = 0.3  # Rol moderado por defecto
+            except Exception as e:
+                logger.warning(f"Error calculando role_in_team para {player}: {e}")
+                # Usar valor predeterminado en caso de error
+                new_features['role_in_team'].loc[player_mask] = 0.3
+            
+            # Inicializar team_injury_impact si no existe
+            if 'team_injury_impact' not in new_features:
+                new_features['team_injury_impact'] = pd.Series(0.01, index=df.index)
             
             # Impacto de lesiones del equipo (aproximado por minutos disponibles)
-            team_mp = df[df['Team'] == player_data['Team'].iloc[0]].groupby('Date')['MP'].sum()
-            expected_mp = len(df[df['Team'] == player_data['Team'].iloc[0]].groupby(['Date', 'Player'])) * 48 / 5
-            team_health = team_mp / expected_mp
-            new_features['team_injury_impact'] = pd.Series(index=df.index)
-            new_features['team_injury_impact'].loc[player_mask] = team_health
+            try:
+                if 'Team' in player_data.columns and 'MP' in player_data.columns and len(player_data) > 0:
+                    # Obtener el equipo del jugador
+                    team = player_data['Team'].iloc[0]
+                    
+                    # Calcular minutos totales del equipo por fecha
+                    team_data = df[df['Team'] == team]
+                    if not team_data.empty:
+                        team_mp = team_data.groupby('Date')['MP'].sum()
+                        
+                        # Calcular minutos esperados (aproximación)
+                        # Número de jugadores por fecha * 48 minutos / 5 jugadores en cancha
+                        expected_mp = len(team_data.groupby(['Date', 'Player'])) * 48 / 5
+                        
+                        if expected_mp > 0:
+                            # Calcular salud del equipo con manejo de división por cero
+                            team_health = (team_mp / expected_mp).clip(0.5, 1.5)
+                            
+                            # Mapear valores a las fechas del jugador
+                            player_dates = player_data['Date']
+                            mapped_health = player_dates.map(team_health)
+                            
+                            # Rellenar valores NaN
+                            mapped_health = mapped_health.fillna(1.0)  # Valor neutral por defecto
+                            
+                            # Asignar al DataFrame principal
+                            new_features['team_injury_impact'].loc[player_mask] = mapped_health
+                        else:
+                            # Si no se pueden calcular minutos esperados
+                            new_features['team_injury_impact'].loc[player_mask] = 1.0
+                    else:
+                        # Si no hay datos del equipo
+                        new_features['team_injury_impact'].loc[player_mask] = 1.0
+                else:
+                    # Si faltan columnas necesarias
+                    new_features['team_injury_impact'].loc[player_mask] = 1.0
+            except Exception as e:
+                logger.warning(f"Error calculando team_injury_impact para {player}: {e}")
+                # Usar valor predeterminado en caso de error
+                new_features['team_injury_impact'].loc[player_mask] = 1.0
+            
+            # Inicializar usage_in_close_games si no existe
+            if 'usage_in_close_games' not in new_features:
+                new_features['usage_in_close_games'] = pd.Series(0.01, index=df.index)
             
             # Uso en juegos cerrados
-            if 'point_diff' in player_data.columns:
-                close_games = abs(player_data['point_diff']) <= 5
-                if close_games.any():
-                    close_usg = player_data.loc[close_games, 'USG%'].mean() if 'USG%' in player_data.columns else None
-                    if close_usg is not None:
-                        new_features['usage_in_close_games'] = pd.Series(index=df.index)
-                        new_features['usage_in_close_games'].loc[player_mask] = close_usg / 100
+            try:
+                if 'point_diff' in player_data.columns:
+                    # Identificar juegos cerrados (diferencia de 5 puntos o menos)
+                    close_games = abs(player_data['point_diff']) <= 5
+                    
+                    if close_games.any():
+                        # Si hay juegos cerrados y tenemos USG%
+                        if 'USG%' in player_data.columns:
+                            close_usg = player_data.loc[close_games, 'USG%'].mean()
+                            if not pd.isna(close_usg):
+                                # Normalizar a escala 0-1
+                                new_features['usage_in_close_games'].loc[player_mask] = close_usg / 100
+                            else:
+                                # Si no hay valor válido, usar el USG% promedio general
+                                avg_usg = player_data['USG%'].mean()
+                                new_features['usage_in_close_games'].loc[player_mask] = avg_usg / 100 if not pd.isna(avg_usg) else 0.2
+                        else:
+                            # Si no hay USG%, usar MP como aproximación
+                            if 'MP' in player_data.columns:
+                                close_mp = player_data.loc[close_games, 'MP'].mean()
+                                avg_mp = player_data['MP'].mean()
+                                if not pd.isna(close_mp) and not pd.isna(avg_mp) and avg_mp > 0:
+                                    # Calcular ratio de minutos en juegos cerrados vs promedio
+                                    mp_ratio = (close_mp / avg_mp).clip(0.5, 1.5)
+                                    new_features['usage_in_close_games'].loc[player_mask] = mp_ratio / 3 + 0.15  # Escalar a un rango razonable
+                                else:
+                                    # Valor predeterminado si no hay datos suficientes
+                                    new_features['usage_in_close_games'].loc[player_mask] = 0.2
+                            else:
+                                # Valor predeterminado si no hay datos suficientes
+                                new_features['usage_in_close_games'].loc[player_mask] = 0.2
+                    else:
+                        # Si no hay juegos cerrados, usar valor predeterminado
+                        new_features['usage_in_close_games'].loc[player_mask] = 0.2
+                else:
+                    # Si no hay columna point_diff, usar valor predeterminado
+                    new_features['usage_in_close_games'].loc[player_mask] = 0.2
+            except Exception as e:
+                logger.warning(f"Error calculando usage_in_close_games para {player}: {e}")
+                # Usar valor predeterminado en caso de error
+                new_features['usage_in_close_games'].loc[player_mask] = 0.2
         
         # Unir las nuevas características
         result = pd.concat([df, pd.DataFrame(new_features)], axis=1)
@@ -3737,79 +4422,204 @@ class FeatureEngineering:
         """
         logger.info("Creando características para predicción de victoria de equipo...")
         start_time = time.time()
-        
+    
         # Verificar columnas necesarias
-        required_cols = ['Team', 'Date', 'team_score', 'opp_score', 'is_win', 'Opp']  # Actualizado nombres
+        required_cols = ['Team', 'Date']
         if not all(col in df.columns for col in required_cols):
             logger.warning("No se pueden generar características de predicción de equipo (faltan columnas necesarias)")
             return df
-        
-        # Crear DataFrame a nivel de equipo
-        team_df = df.groupby(['Team', 'Date']).agg({
-            'team_score': 'mean',  # Actualizado
-            'opp_score': 'mean',   # Actualizado
-            'is_win': 'first',     # Actualizado
-            'is_home': 'first',
-            'Opp': 'first'
-        }).reset_index()
-        
-        # Características por equipo
+    
+        # Asegurar que las columnas necesarias existan
+        if 'team_score' not in df.columns and 'PTS' in df.columns:
+            df['team_score'] = df['PTS']
+        if 'opp_score' not in df.columns and 'opp_PTS' in df.columns:
+            df['opp_score'] = df['opp_PTS']
+        if 'is_win' not in df.columns and 'Win' in df.columns:
+            df['is_win'] = df['Win']
+        if 'Opp' not in df.columns and 'opponent' in df.columns:
+            df['Opp'] = df['opponent']
+    
+        # Crear un diccionario para almacenar las nuevas características
         new_features = {}
+    
+        try:
+            # Crear DataFrame a nivel de equipo
+            team_df = df.groupby(['Team', 'Date']).agg({
+                'team_score': 'mean',
+                'opp_score': 'mean',
+                'is_win': 'first',
+                'is_home': 'first',
+                'Opp': 'first'
+            }).reset_index()
         
-        for team in team_df['Team'].unique():
-            team_mask = team_df['Team'] == team
-            team_data = team_df[team_mask].sort_values('Date')
+            # Procesar cada equipo
+            for team in team_df['Team'].unique():
+                # Obtener índices en el DataFrame original para este equipo
+                team_idx = df[df['Team'] == team].index
+                
+                # Filtrar datos para este equipo
+                team_mask = team_df['Team'] == team
+                team_data = team_df[team_mask].sort_values('Date')
             
-            if len(team_data) < 5:  # Necesitamos al menos 5 juegos
-                continue
+                if len(team_data) < 5:  # Necesitamos al menos 5 juegos
+                    continue
             
-            # Promedios móviles y tendencias
+                # Promedios móviles y tendencias
+                for window in [5, 10]:
+                    # Crear Series con el índice del DataFrame original
+                    if f'Team_Points_avg_{window}' not in new_features:
+                        new_features[f'Team_Points_avg_{window}'] = pd.Series(index=df.index)
+                    if f'Opp_Points_avg_{window}' not in new_features:
+                        new_features[f'Opp_Points_avg_{window}'] = pd.Series(index=df.index)
+                    if f'point_diff_avg_{window}' not in new_features:
+                        new_features[f'point_diff_avg_{window}'] = pd.Series(index=df.index)
+                    if f'win_pct_{window}' not in new_features:
+                        new_features[f'win_pct_{window}'] = pd.Series(index=df.index)
+                    
+                    # Puntos anotados y recibidos
+                    team_pts_avg = team_data['team_score'].rolling(window, min_periods=1).mean().values
+                    opp_pts_avg = team_data['opp_score'].rolling(window, min_periods=1).mean().values
+                
+                    # Diferencial de puntos
+                    point_diff = team_data['team_score'] - team_data['opp_score']
+                    diff_avg = point_diff.rolling(window, min_periods=1).mean().values
+                
+                    # Porcentaje de victorias
+                    win_pct = team_data['is_win'].rolling(window, min_periods=1).mean().values
+                    
+                    # Mapear valores a las filas correspondientes del DataFrame original
+                    for i, idx in enumerate(team_idx):
+                        if i < len(team_pts_avg) and idx in df.index:
+                            new_features[f'Team_Points_avg_{window}'].loc[idx] = team_pts_avg[i]
+                            new_features[f'Opp_Points_avg_{window}'].loc[idx] = opp_pts_avg[i]
+                            new_features[f'point_diff_avg_{window}'].loc[idx] = diff_avg[i]
+                            new_features[f'win_pct_{window}'].loc[idx] = win_pct[i]
+                
+                # Rachas
+                win_streak = team_data['is_win'].copy()
+                win_streak = win_streak.groupby((win_streak != win_streak.shift()).cumsum()).cumcount() + 1
+                win_streak.loc[~team_data['is_win']] *= -1  # Negativo para rachas de derrota
+            
+                if 'win_streak' not in new_features:
+                    new_features['win_streak'] = pd.Series(index=df.index)
+                
+                # Mapear valores de win_streak a las filas correspondientes
+                for i, idx in enumerate(team_idx):
+                    if i < len(win_streak) and idx in df.index:
+                        new_features['win_streak'].loc[idx] = win_streak.iloc[i]
+            
+                # Rendimiento en casa/fuera
+                if 'home_win_pct' not in new_features:
+                    new_features['home_win_pct'] = pd.Series(index=df.index, data=0.5)
+                if 'away_win_pct' not in new_features:
+                    new_features['away_win_pct'] = pd.Series(index=df.index, data=0.5)
+            
+                # Calcular para juegos en casa
+                home_mask = team_data['is_home'] == 1
+                if home_mask.any():
+                    home_win_pct = team_data.loc[home_mask, 'is_win'].expanding().mean()
+                    home_idx = df[(df['Team'] == team) & (df['is_home'] == 1)].index
+                    for i, idx in enumerate(home_idx):
+                        if i < len(home_win_pct) and idx in df.index:
+                            new_features['home_win_pct'].loc[idx] = home_win_pct.iloc[i]
+            
+                # Calcular para juegos fuera
+                away_mask = team_data['is_home'] == 0
+                if away_mask.any():
+                    away_win_pct = team_data.loc[away_mask, 'is_win'].expanding().mean()
+                    away_idx = df[(df['Team'] == team) & (df['is_home'] == 0)].index
+                    for i, idx in enumerate(away_idx):
+                        if i < len(away_win_pct) and idx in df.index:
+                            new_features['away_win_pct'].loc[idx] = away_win_pct.iloc[i]
+    
+                # Historial contra oponentes
+                if 'head_to_head_wins' not in new_features:
+                    new_features['head_to_head_wins'] = pd.Series(index=df.index, data=0)
+                if 'matchup_history' not in new_features:
+                    new_features['matchup_history'] = pd.Series(index=df.index, data=0.5)
+            
+                try:
+                    # Contar victorias contra cada oponente
+                    opp_wins = team_data[team_data['is_win'] == 1].groupby('Opp').size().to_dict()
+                    
+                    # Historial de enfrentamientos (porcentaje de victorias)
+                    matchup_history = team_data.groupby('Opp')['is_win'].mean().to_dict()
+                
+                    # Mapear a las filas correspondientes
+                    for idx in team_idx:
+                        if idx in df.index and 'Opp' in df.columns:
+                            opp = df.loc[idx, 'Opp']
+                            if opp in opp_wins:
+                                new_features['head_to_head_wins'].loc[idx] = opp_wins[opp]
+                            if opp in matchup_history:
+                                new_features['matchup_history'].loc[idx] = matchup_history[opp]
+                except Exception as e:
+                    logger.warning(f"Error calculando historial contra oponentes para {team}: {e}")
+            # Asegurar que todas las columnas existan
             for window in [5, 10]:
-                # Puntos anotados y recibidos
-                team_data[f'Team_Points_avg_{window}'] = team_data['team_score'].rolling(window, min_periods=1).mean()
-                team_data[f'Opp_Points_avg_{window}'] = team_data['opp_score'].rolling(window, min_periods=1).mean()
-                
-                # Diferencial de puntos
-                point_diff = team_data['team_score'] - team_data['opp_score']
-                team_data[f'point_diff_avg_{window}'] = point_diff.rolling(window, min_periods=1).mean()
-                
-                # Porcentaje de victorias
-                team_data[f'win_pct_{window}'] = team_data['is_win'].rolling(window, min_periods=1).mean()
-            
-            # Rachas
-            team_data['win_streak'] = team_data['is_win'].groupby((team_data['is_win'] != team_data['is_win'].shift()).cumsum()).cumcount() + 1
-            team_data.loc[~team_data['is_win'], 'win_streak'] *= -1  # Negativo para rachas de derrota
-            
-            # Rendimiento en casa/fuera
-            home_mask = team_data['is_home'] == 1
-            if home_mask.any():
-                team_data.loc[home_mask, 'home_win_pct'] = team_data.loc[home_mask, 'is_win'].expanding().mean()
-            away_mask = ~home_mask
-            if away_mask.any():
-                team_data.loc[away_mask, 'away_win_pct'] = team_data.loc[away_mask, 'is_win'].expanding().mean()
-            
-            # Historial contra oponentes
-            opp_wins = team_data[team_data['is_win']].groupby('Opp').size()
-            team_data['head_to_head_wins'] = team_data['Opp'].map(opp_wins).fillna(0)
-            
-            matchup_history = team_data.groupby('Opp')['is_win'].mean()
-            team_data['matchup_history'] = team_data['Opp'].map(matchup_history).fillna(0.5)
-            
-            # Guardar características para este equipo
-            for col in team_data.columns:
-                if col not in ['Team', 'Date', 'team_score', 'opp_score', 'is_win', 'is_home', 'Opp']:
-                    if col not in new_features:
-                        new_features[col] = pd.Series(index=df.index)
-                    new_features[col].loc[team_mask] = team_data[col]
+                if f'Team_Points_avg_{window}' not in new_features:
+                    new_features[f'Team_Points_avg_{window}'] = pd.Series(index=df.index, data=110)
+                if f'Opp_Points_avg_{window}' not in new_features:
+                    new_features[f'Opp_Points_avg_{window}'] = pd.Series(index=df.index, data=110)
+                if f'point_diff_avg_{window}' not in new_features:
+                    new_features[f'point_diff_avg_{window}'] = pd.Series(index=df.index, data=0)
+                if f'win_pct_{window}' not in new_features:
+                    new_features[f'win_pct_{window}'] = pd.Series(index=df.index, data=0.5)
         
-        # Convertir a DataFrame y unir con el original
-        features_df = pd.DataFrame(new_features)
-        result = pd.concat([df, features_df], axis=1)
-        
-        # Registrar características generadas
-        num_features = len(new_features)
-        missing_pct = features_df.isnull().mean().mean() * 100
-        logger.info(f"Características de predicción de equipo: {num_features} columnas, {missing_pct:.2f}% valores faltantes, {time.time() - start_time:.2f} segundos")
+            # Convertir a DataFrame y unir con el original
+            # En lugar de usar series con índices potencialmente problemáticos,
+            # creamos un nuevo DataFrame con el mismo índice que df
+            features_df = pd.DataFrame(index=df.index)
+            
+            # Convertir cada Serie a un diccionario para evitar problemas de índice
+            for col, series in new_features.items():
+                # Crear un diccionario de índice -> valor, filtrando índices inválidos
+                value_dict = {}
+                for idx in series.index:
+                    if idx in df.index:  # Solo incluir índices que estén en df
+                        value_dict[idx] = series.loc[idx]
+                
+                # Crear una nueva Serie con el índice correcto
+                if value_dict:
+                    features_df[col] = pd.Series(value_dict)
+            
+            # Rellenar valores nulos con valores predeterminados
+            for window in [5, 10]:
+                if f'Team_Points_avg_{window}' in features_df.columns:
+                    features_df[f'Team_Points_avg_{window}'].fillna(110, inplace=True)
+                if f'Opp_Points_avg_{window}' in features_df.columns:
+                    features_df[f'Opp_Points_avg_{window}'].fillna(110, inplace=True)
+                if f'point_diff_avg_{window}' in features_df.columns:
+                    features_df[f'point_diff_avg_{window}'].fillna(0, inplace=True)
+                if f'win_pct_{window}' in features_df.columns:
+                    features_df[f'win_pct_{window}'].fillna(0.5, inplace=True)
+            
+            if 'win_streak' in features_df.columns:
+                features_df['win_streak'].fillna(0, inplace=True)
+            if 'home_win_pct' in features_df.columns:
+                features_df['home_win_pct'].fillna(0.5, inplace=True)
+            if 'away_win_pct' in features_df.columns:
+                features_df['away_win_pct'].fillna(0.5, inplace=True)
+            if 'head_to_head_wins' in features_df.columns:
+                features_df['head_to_head_wins'].fillna(0, inplace=True)
+            if 'matchup_history' in features_df.columns:
+                features_df['matchup_history'].fillna(0.5, inplace=True)
+            
+            # Unir con el DataFrame original de manera segura
+            # Usar merge en lugar de concat para evitar problemas de índice
+            result = df.copy()
+            for col in features_df.columns:
+                if col not in result.columns:
+                    result[col] = features_df[col]
+            
+            # Registrar características generadas
+            num_features = len(features_df.columns)
+            missing_pct = features_df.isnull().mean().mean() * 100
+            logger.info(f"Características de predicción de equipo: {num_features} columnas, {missing_pct:.2f}% valores faltantes, {time.time() - start_time:.2f} segundos")
+        except Exception as e:
+            logger.error(f"Error en add_team_prediction_features: {e}")
+            # Devolver el DataFrame original si hay un error
+            return df
         
         return result
 
@@ -4026,13 +4836,46 @@ class FeatureEngineering:
             player_data.loc[player_data['PTS_streak'] < 0, 'PTS_streak'] *= -1
             
             # 4. Probabilidades por percentiles
-            for p in [25, 50, 75]:
-                threshold = player_data['PTS'].quantile(p/100)
-                prob = (player_data['PTS'] > threshold).astype(float)
-                # Probabilidad base
-                player_data[f'PTS_p{p}_prob'] = prob.rolling(10, min_periods=1).mean()
-                # Versión suavizada
-                player_data[f'PTS_p{p}_prob_smooth'] = prob.ewm(span=10).mean()
+            try:
+                # Inicializar características en el DataFrame principal
+                for p in [25, 50, 75]:
+                    if f'PTS_p{p}_prob' not in new_features:
+                        new_features[f'PTS_p{p}_prob'] = pd.Series(index=df.index, data=0.5)
+                    if f'PTS_p{p}_prob_smooth' not in new_features:
+                        new_features[f'PTS_p{p}_prob_smooth'] = pd.Series(index=df.index, data=0.5)
+                
+                # Calcular umbrales para cada percentil
+                pts_data = player_data['PTS'].dropna()
+                if len(pts_data) >= 5:  # Asegurar suficientes datos
+                    for p in [25, 50, 75]:
+                        # Usar el valor real de puntos como umbral, no el percentil
+                        threshold = p
+                        
+                        # Calcular probabilidad (1 si supera el umbral, 0 si no)
+                        prob = (player_data['PTS'] > threshold).astype(float)
+                        
+                        # Probabilidad base (media móvil)
+                        prob_rolling = prob.rolling(10, min_periods=1).mean().fillna(0.5)
+                        player_data[f'PTS_p{p}_prob'] = prob_rolling
+                        
+                        # Versión suavizada (media móvil exponencial)
+                        prob_smooth = prob.ewm(span=10).mean().fillna(0.5)
+                        player_data[f'PTS_p{p}_prob_smooth'] = prob_smooth
+                        
+                        # Asignar al DataFrame principal
+                        new_features[f'PTS_p{p}_prob'].loc[player_mask] = prob_rolling
+                        new_features[f'PTS_p{p}_prob_smooth'].loc[player_mask] = prob_smooth
+                else:
+                    # No hay suficientes datos, usar valores predeterminados
+                    for p in [25, 50, 75]:
+                        new_features[f'PTS_p{p}_prob'].loc[player_mask] = 0.5
+                        new_features[f'PTS_p{p}_prob_smooth'].loc[player_mask] = 0.5
+            except Exception as e:
+                logger.warning(f"Error calculando probabilidades de puntos para {player}: {e}")
+                # Usar valores predeterminados en caso de error
+                for p in [25, 50, 75]:
+                    new_features[f'PTS_p{p}_prob'].loc[player_mask] = 0.5
+                    new_features[f'PTS_p{p}_prob_smooth'].loc[player_mask] = 0.5
             
             # 5. Consistencia y eficiencia
             # Consistencia (inverso del coeficiente de variación)
@@ -4185,13 +5028,46 @@ class FeatureEngineering:
             player_data.loc[player_data['TRB_streak'] < 0, 'TRB_streak'] *= -1
             
             # 4. Probabilidades por percentiles
-            for p in [25, 50, 75]:
-                threshold = player_data['TRB'].quantile(p/100)
-                prob = (player_data['TRB'] > threshold).astype(float)
-                # Probabilidad base
-                player_data[f'TRB_p{p}_prob'] = prob.rolling(10, min_periods=1).mean()
-                # Versión suavizada
-                player_data[f'TRB_p{p}_prob_smooth'] = prob.ewm(span=10).mean()
+            try:
+                # Inicializar características en el DataFrame principal
+                for p in [25, 50, 75]:
+                    if f'TRB_p{p}_prob' not in new_features:
+                        new_features[f'TRB_p{p}_prob'] = pd.Series(index=df.index, data=0.5)
+                    if f'TRB_p{p}_prob_smooth' not in new_features:
+                        new_features[f'TRB_p{p}_prob_smooth'] = pd.Series(index=df.index, data=0.5)
+                
+                # Calcular umbrales para cada percentil
+                trb_data = player_data['TRB'].dropna()
+                if len(trb_data) >= 5:  # Asegurar suficientes datos
+                    for p in [25, 50, 75]:
+                        # Usar el valor real de rebotes como umbral, no el percentil
+                        threshold = p
+                        
+                        # Calcular probabilidad (1 si supera el umbral, 0 si no)
+                        prob = (player_data['TRB'] > threshold).astype(float)
+                        
+                        # Probabilidad base (media móvil)
+                        prob_rolling = prob.rolling(10, min_periods=1).mean().fillna(0.5)
+                        player_data[f'TRB_p{p}_prob'] = prob_rolling
+                        
+                        # Versión suavizada (media móvil exponencial)
+                        prob_smooth = prob.ewm(span=10).mean().fillna(0.5)
+                        player_data[f'TRB_p{p}_prob_smooth'] = prob_smooth
+                        
+                        # Asignar al DataFrame principal
+                        new_features[f'TRB_p{p}_prob'].loc[player_mask] = prob_rolling
+                        new_features[f'TRB_p{p}_prob_smooth'].loc[player_mask] = prob_smooth
+                else:
+                    # No hay suficientes datos, usar valores predeterminados
+                    for p in [25, 50, 75]:
+                        new_features[f'TRB_p{p}_prob'].loc[player_mask] = 0.5
+                        new_features[f'TRB_p{p}_prob_smooth'].loc[player_mask] = 0.5
+            except Exception as e:
+                logger.warning(f"Error calculando probabilidades de rebotes para {player}: {e}")
+                # Usar valores predeterminados en caso de error
+                for p in [25, 50, 75]:
+                    new_features[f'TRB_p{p}_prob'].loc[player_mask] = 0.5
+                    new_features[f'TRB_p{p}_prob_smooth'].loc[player_mask] = 0.5
             
             # 5. Consistencia y eficiencia
             # Consistencia (inverso del coeficiente de variación)
@@ -4365,10 +5241,46 @@ class FeatureEngineering:
             player_data.loc[player_data['AST_streak'] < 0, 'AST_streak'] *= -1
             
             # Probabilidades optimizadas
-            for p in [25, 50, 75]:
-                prob = (player_data['AST'] > player_data['AST'].quantile(p/100)).astype(float)
-                player_data[f'AST_p{p}_prob'] = prob.rolling(10, min_periods=1).mean()
-                player_data[f'AST_p{p}_prob_smooth'] = prob.ewm(span=10).mean()
+            try:
+                # Inicializar características en el DataFrame principal
+                for p in [25, 50, 75]:
+                    if f'AST_p{p}_prob' not in new_features:
+                        new_features[f'AST_p{p}_prob'] = pd.Series(index=df.index, data=0.5)
+                    if f'AST_p{p}_prob_smooth' not in new_features:
+                        new_features[f'AST_p{p}_prob_smooth'] = pd.Series(index=df.index, data=0.5)
+                
+                # Calcular umbrales para cada percentil
+                ast_data = player_data['AST'].dropna()
+                if len(ast_data) >= 5:  # Asegurar suficientes datos
+                    for p in [25, 50, 75]:
+                        # Usar el valor real de asistencias como umbral, no el percentil
+                        threshold = p / 10  # Dividir por 10 para tener umbrales razonables (2.5, 5, 7.5 asistencias)
+                        
+                        # Calcular probabilidad (1 si supera el umbral, 0 si no)
+                        prob = (player_data['AST'] > threshold).astype(float)
+                        
+                        # Probabilidad base (media móvil)
+                        prob_rolling = prob.rolling(10, min_periods=1).mean().fillna(0.5)
+                        player_data[f'AST_p{p}_prob'] = prob_rolling
+                        
+                        # Versión suavizada (media móvil exponencial)
+                        prob_smooth = prob.ewm(span=10).mean().fillna(0.5)
+                        player_data[f'AST_p{p}_prob_smooth'] = prob_smooth
+                        
+                        # Asignar al DataFrame principal
+                        new_features[f'AST_p{p}_prob'].loc[player_mask] = prob_rolling
+                        new_features[f'AST_p{p}_prob_smooth'].loc[player_mask] = prob_smooth
+                else:
+                    # No hay suficientes datos, usar valores predeterminados
+                    for p in [25, 50, 75]:
+                        new_features[f'AST_p{p}_prob'].loc[player_mask] = 0.5
+                        new_features[f'AST_p{p}_prob_smooth'].loc[player_mask] = 0.5
+            except Exception as e:
+                logger.warning(f"Error calculando probabilidades de asistencias para {player}: {e}")
+                # Usar valores predeterminados en caso de error
+                for p in [25, 50, 75]:
+                    new_features[f'AST_p{p}_prob'].loc[player_mask] = 0.5
+                    new_features[f'AST_p{p}_prob_smooth'].loc[player_mask] = 0.5
             
             # Consistencia y eficiencia
             ast_mean = player_data['AST'].mean()

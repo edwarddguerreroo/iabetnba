@@ -8,11 +8,12 @@ class ResultParser:
     """
     def __init__(self):
         # Patrón regex para extraer información del resultado
-        self.pattern = r'^([WL])\s+(\d+)-(\d+)$'
+        # Actualizado para manejar tiempos adicionales (OT, 2OT, etc.)
+        self.pattern = r'^([WL])\s+(\d+)-(\d+)(?:\s+\((\d*OT)\))?$'
     
     def parse_result(self, result_str):
         """
-        Parsea un string de resultado (ej: 'W 123-100' o 'L 114-116')
+        Parsea un string de resultado (ej: 'W 123-100', 'L 114-116', 'W 133-129 (OT)', 'L 124-128 (2OT)')
         
         Args:
             result_str (str): String con el resultado del partido
@@ -24,6 +25,9 @@ class ResultParser:
                 - opp_score (int): Puntos anotados por el oponente
                 - total_score (int): Suma total de puntos
                 - point_diff (int): Diferencia de puntos (positiva si es victoria)
+                - overtime (str): Tipo de tiempo adicional (OT, 2OT, etc.) o None si no hay
+                - has_overtime (int): 1 si hubo tiempo adicional, 0 si no
+                - overtime_periods (int): Número de periodos adicionales (0, 1, 2, etc.)
         """
         try:
             # Limpiar el string
@@ -35,7 +39,9 @@ class ResultParser:
                 return self._create_null_result()
             
             # Extraer componentes
-            outcome, score1, score2 = match.groups()
+            groups = match.groups()
+            outcome, score1, score2 = groups[0], groups[1], groups[2]
+            overtime = groups[3] if len(groups) > 3 and groups[3] else None
             score1, score2 = int(score1), int(score2)
             
             # Determinar victoria/derrota
@@ -56,7 +62,10 @@ class ResultParser:
                 'team_score': team_score,
                 'opp_score': opp_score,
                 'total_score': total_score,
-                'point_diff': point_diff
+                'point_diff': point_diff,
+                'overtime': overtime,
+                'has_overtime': 1 if overtime else 0,
+                'overtime_periods': int(overtime[0]) if overtime and overtime[0].isdigit() else 1 if overtime else 0
             }
             
         except Exception as e:
@@ -70,7 +79,10 @@ class ResultParser:
             'team_score': np.nan,
             'opp_score': np.nan,
             'total_score': np.nan,
-            'point_diff': np.nan
+            'point_diff': np.nan,
+            'overtime': None,
+            'has_overtime': 0,
+            'overtime_periods': 0
         }
     
     def parse_dataframe(self, df, result_column='Result'):
